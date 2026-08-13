@@ -19,6 +19,10 @@ release/
 secrets.json
 **/secrets.json
 
+# Unused mobile icon sets from `tauri icon`
+src-tauri/icons/android/
+src-tauri/icons/ios/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
