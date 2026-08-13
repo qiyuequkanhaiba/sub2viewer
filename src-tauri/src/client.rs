@@ -372,9 +372,6 @@ impl Sub2Client {
                 match self.fetch_accounts_fallback(base_url, &token).await {
                     Ok(mut snap) => {
                         snap.site_id = site_id.to_string();
-                        if snap.error.is_none() {
-                            snap.error = Some(format!("可用性接口失败，已回退账号列表: {e}"));
-                        }
                         snap
                     }
                     Err(e2) => error_admin(site_id, format!("{e}; fallback: {e2}")),

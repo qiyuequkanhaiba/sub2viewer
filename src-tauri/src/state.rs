@@ -39,6 +39,12 @@ impl AppState {
         AppSettingsPublic {
             refresh_interval_secs: settings.refresh_interval_secs,
             low_balance_threshold: settings.low_balance_threshold,
+            warn_balance_usd: settings.warn_balance_usd,
+            critical_balance_usd: settings.critical_balance_usd.max(settings.low_balance_threshold),
+            warn_health_pct: settings.warn_health_pct,
+            critical_health_pct: settings.critical_health_pct,
+            warn_available_count: settings.warn_available_count,
+            critical_available_count: settings.critical_available_count,
             sites: settings.sites.iter().map(Store::to_public).collect(),
         }
     }
@@ -151,13 +157,44 @@ impl AppState {
         &self,
         refresh_interval_secs: Option<u64>,
         low_balance_threshold: Option<f64>,
+        warn_balance_usd: Option<f64>,
+        critical_balance_usd: Option<f64>,
+        warn_health_pct: Option<f64>,
+        critical_health_pct: Option<f64>,
+        warn_available_count: Option<i64>,
+        critical_available_count: Option<i64>,
     ) -> Result<(), String> {
         let mut settings = self.settings.write().await;
         if let Some(v) = refresh_interval_secs {
             settings.refresh_interval_secs = v.clamp(15, 3600);
         }
-        if let Some(v) = low_balance_threshold {
-            settings.low_balance_threshold = v.max(0.0);
+        if let Some(v) = warn_balance_usd {
+            settings.warn_balance_usd = v.max(0.0);
+        }
+        if let Some(v) = critical_balance_usd.or(low_balance_threshold) {
+            settings.critical_balance_usd = v.max(0.0);
+            settings.low_balance_threshold = settings.critical_balance_usd;
+        }
+        if settings.warn_balance_usd < settings.critical_balance_usd {
+            settings.warn_balance_usd = settings.critical_balance_usd;
+        }
+        if let Some(v) = warn_health_pct {
+            settings.warn_health_pct = v.clamp(1.0, 100.0);
+        }
+        if let Some(v) = critical_health_pct {
+            settings.critical_health_pct = v.clamp(0.0, 100.0);
+        }
+        if settings.warn_health_pct < settings.critical_health_pct {
+            settings.warn_health_pct = settings.critical_health_pct;
+        }
+        if let Some(v) = warn_available_count {
+            settings.warn_available_count = v.max(0);
+        }
+        if let Some(v) = critical_available_count {
+            settings.critical_available_count = v.max(0);
+        }
+        if settings.warn_available_count < settings.critical_available_count {
+            settings.warn_available_count = settings.critical_available_count;
         }
         self.store
             .save_settings(&settings)
@@ -295,13 +332,18 @@ async fn update_tray_tooltip(app: &AppHandle, state: &AppState) {
                 let _ = err;
             } else if let Some(bal) = u.balance.or(u.remaining) {
                 parts.push(format!("{}: ${:.2}", s.site.name, bal));
-                if bal < view.settings.low_balance_threshold {
+                if bal >= 0.0 && bal <= view.settings.critical_balance_usd {
+                    problems += 1;
+                } else if bal >= 0.0 && bal <= view.settings.warn_balance_usd {
                     problems += 1;
                 }
             }
         }
         if let Some(a) = &s.admin {
-            if a.error.is_some() || a.error_accounts > 0 {
+            if a.error.is_some()
+                || a.error_accounts > 0
+                || a.available_accounts <= view.settings.critical_available_count
+            {
                 problems += 1;
             }
             parts.push(format!(

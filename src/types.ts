@@ -85,9 +85,22 @@ export interface SiteSnapshot {
   admin?: AdminSnapshot | null;
 }
 
+export interface Thresholds {
+  warnBalanceUsd: number;
+  criticalBalanceUsd: number;
+  warnAvailableCount: number;
+  criticalAvailableCount: number;
+}
+
 export interface AppSettingsPublic {
   refreshIntervalSecs: number;
   lowBalanceThreshold: number;
+  warnBalanceUsd: number;
+  criticalBalanceUsd: number;
+  warnHealthPct: number;
+  criticalHealthPct: number;
+  warnAvailableCount: number;
+  criticalAvailableCount: number;
   sites: SitePublic[];
 }
 

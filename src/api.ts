@@ -25,6 +25,12 @@ export function deleteSite(siteId: string) {
 export function updateSettings(input: {
   refreshIntervalSecs?: number;
   lowBalanceThreshold?: number;
+  warnBalanceUsd?: number;
+  criticalBalanceUsd?: number;
+  warnHealthPct?: number;
+  criticalHealthPct?: number;
+  warnAvailableCount?: number;
+  criticalAvailableCount?: number;
 }) {
   return invoke<void>("update_settings", { input });
 }

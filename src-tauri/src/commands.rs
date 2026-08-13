@@ -56,7 +56,16 @@ pub async fn update_settings(
     input: SettingsUpdate,
 ) -> Result<(), String> {
     state
-        .update_settings(input.refresh_interval_secs, input.low_balance_threshold)
+        .update_settings(
+            input.refresh_interval_secs,
+            input.low_balance_threshold,
+            input.warn_balance_usd,
+            input.critical_balance_usd,
+            input.warn_health_pct,
+            input.critical_health_pct,
+            input.warn_available_count,
+            input.critical_available_count,
+        )
         .await?;
     state.emit_state(&app).await;
     Ok(())

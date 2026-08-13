@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import type { AppStateView, SitePublic, SiteRole } from "../types";
 import {
@@ -15,7 +15,9 @@ const state = ref<AppStateView | null>(null);
 const message = ref("");
 const error = ref("");
 const saving = ref(false);
+const ready = ref(false);
 let unlisten: (() => void) | undefined;
+let persistTimer: number | undefined;
 
 const form = reactive({
   id: "" as string,
@@ -31,7 +33,10 @@ const form = reactive({
 
 const settingsForm = reactive({
   refreshIntervalSecs: 60,
-  lowBalanceThreshold: 1,
+  warnBalanceUsd: 5,
+  criticalBalanceUsd: 1,
+  warnAvailableCount: 5,
+  criticalAvailableCount: 2,
 });
 
 const editing = computed(() => !!form.id);
@@ -47,7 +52,14 @@ const twoFa = reactive({
 async function load() {
   state.value = await getState();
   settingsForm.refreshIntervalSecs = state.value.settings.refreshIntervalSecs;
-  settingsForm.lowBalanceThreshold = state.value.settings.lowBalanceThreshold;
+  settingsForm.warnBalanceUsd = state.value.settings.warnBalanceUsd ?? 5;
+  settingsForm.criticalBalanceUsd =
+    state.value.settings.criticalBalanceUsd ??
+    state.value.settings.lowBalanceThreshold ??
+    1;
+  settingsForm.warnAvailableCount = state.value.settings.warnAvailableCount ?? 5;
+  settingsForm.criticalAvailableCount =
+    state.value.settings.criticalAvailableCount ?? 2;
 }
 
 function resetForm() {
@@ -113,18 +125,38 @@ async function removeSite(site: SitePublic) {
   }
 }
 
-async function saveSettings() {
+async function persistSettings() {
+  const refresh = Number(settingsForm.refreshIntervalSecs);
+  const warnBal = Number(settingsForm.warnBalanceUsd);
+  const critBal = Number(settingsForm.criticalBalanceUsd);
+  const warnAvail = Number(settingsForm.warnAvailableCount);
+  const critAvail = Number(settingsForm.criticalAvailableCount);
+  if ([refresh, warnBal, critBal, warnAvail, critAvail].some((n) => Number.isNaN(n))) {
+    return;
+  }
   try {
     await updateSettings({
-      refreshIntervalSecs: Number(settingsForm.refreshIntervalSecs),
-      lowBalanceThreshold: Number(settingsForm.lowBalanceThreshold),
+      refreshIntervalSecs: refresh,
+      warnBalanceUsd: warnBal,
+      criticalBalanceUsd: critBal,
+      warnAvailableCount: warnAvail,
+      criticalAvailableCount: critAvail,
     });
-    message.value = "通用设置已保存";
-    await load();
+    error.value = "";
   } catch (e) {
     error.value = String(e);
   }
 }
+
+function schedulePersist() {
+  if (!ready.value) return;
+  if (persistTimer) window.clearTimeout(persistTimer);
+  persistTimer = window.setTimeout(() => {
+    void persistSettings();
+  }, 220);
+}
+
+watch(settingsForm, schedulePersist, { deep: true });
 
 async function doAdminLogin(site: SitePublic) {
   const email = prompt("管理员邮箱", site.email || "") || "";
@@ -177,12 +209,16 @@ function credText(site: SitePublic) {
 
 onMounted(async () => {
   await load();
+  ready.value = true;
   unlisten = await listen<AppStateView>("state-updated", (e) => {
     state.value = e.payload;
   });
 });
 
-onUnmounted(() => unlisten?.());
+onUnmounted(() => {
+  unlisten?.();
+  if (persistTimer) window.clearTimeout(persistTimer);
+});
 </script>
 
 <template>
@@ -197,29 +233,80 @@ onUnmounted(() => unlisten?.());
     </header>
 
     <section class="panel general">
-      <h2>通用</h2>
-      <div class="inline-form">
-        <label class="inline">
-          <span>刷新间隔</span>
-          <input
-            v-model.number="settingsForm.refreshIntervalSecs"
-            type="number"
-            min="15"
-            max="3600"
-          />
-          <em>秒</em>
+      <div class="panel-head">
+        <h2>监测阈值</h2>
+        <span class="live">修改即时生效</span>
+      </div>
+
+      <div class="threshold-grid">
+        <label class="metric-cell span2">
+          <span class="metric-label">刷新间隔</span>
+          <span class="metric-field">
+            <input
+              v-model.number="settingsForm.refreshIntervalSecs"
+              type="number"
+              min="15"
+              max="3600"
+            />
+            <em>秒</em>
+          </span>
         </label>
-        <label class="inline">
-          <span>低余额阈值</span>
-          <input
-            v-model.number="settingsForm.lowBalanceThreshold"
-            type="number"
-            min="0"
-            step="0.1"
-          />
-          <em>USD</em>
-        </label>
-        <button class="btn primary" type="button" @click="saveSettings">保存通用设置</button>
+
+        <div class="metric-group">
+          <div class="group-title">余额</div>
+          <label class="metric-cell">
+            <span class="metric-label"><i class="swatch warn" />预警</span>
+            <span class="metric-field">
+              <input
+                v-model.number="settingsForm.warnBalanceUsd"
+                type="number"
+                min="0"
+                step="0.1"
+              />
+              <em>USD</em>
+            </span>
+          </label>
+          <label class="metric-cell">
+            <span class="metric-label"><i class="swatch bad" />告警</span>
+            <span class="metric-field">
+              <input
+                v-model.number="settingsForm.criticalBalanceUsd"
+                type="number"
+                min="0"
+                step="0.1"
+              />
+              <em>USD</em>
+            </span>
+          </label>
+        </div>
+
+        <div class="metric-group">
+          <div class="group-title">健康（可用账号）</div>
+          <label class="metric-cell">
+            <span class="metric-label"><i class="swatch warn" />预警</span>
+            <span class="metric-field">
+              <input
+                v-model.number="settingsForm.warnAvailableCount"
+                type="number"
+                min="0"
+                step="1"
+              />
+              <em>个</em>
+            </span>
+          </label>
+          <label class="metric-cell">
+            <span class="metric-label"><i class="swatch bad" />告警</span>
+            <span class="metric-field">
+              <input
+                v-model.number="settingsForm.criticalAvailableCount"
+                type="number"
+                min="0"
+                step="1"
+              />
+              <em>个</em>
+            </span>
+          </label>
+        </div>
       </div>
     </section>
 
@@ -420,11 +507,156 @@ onUnmounted(() => unlisten?.());
   flex-shrink: 0;
 }
 
-.inline-form {
+.panel-head {
   display: flex;
   align-items: center;
-  gap: 18px;
-  flex-wrap: nowrap;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.panel-head h2 {
+  margin: 0;
+}
+
+.live {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ok);
+  white-space: nowrap;
+}
+
+.threshold-grid {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+@media (max-width: 880px) {
+  .threshold-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .metric-cell.span2 {
+    grid-column: 1 / -1;
+  }
+}
+
+.metric-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.group-title {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: -0.1px;
+  white-space: nowrap;
+}
+
+.metric-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.metric-cell.span2 {
+  justify-content: center;
+  padding: 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.metric-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.metric-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.metric-field input {
+  width: 88px;
+  min-width: 0;
+  flex: 1;
+  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  border-radius: 9px;
+  padding: 8px 10px;
+  outline: none;
+}
+
+.metric-field input:focus {
+  border-color: var(--accent);
+}
+
+.metric-field em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.swatch.warn {
+  background: #ff9f0a;
+}
+
+.swatch.bad {
+  background: #ff3b30;
+}
+
+.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.inline span {
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.inline em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.inline input {
+  width: 88px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 7px 10px;
+  outline: none;
+}
+
+.inline input:focus {
+  border-color: var(--accent);
 }
 
 .inline {

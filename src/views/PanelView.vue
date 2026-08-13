@@ -5,7 +5,7 @@ import { LogicalSize, getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppStateView } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 import { getState } from "../api";
-import { mergeMetrics } from "../metrics";
+import { mergeMetrics, statusLabel, thresholdsFromSettings } from "../metrics";
 import { bindWindowDrag } from "../useWindowDrag";
 
 const state = ref<AppStateView | null>(null);
@@ -18,15 +18,17 @@ let ro: ResizeObserver | undefined;
 const m = computed(() =>
   mergeMetrics(
     state.value?.snapshots || [],
-    state.value?.settings.lowBalanceThreshold ?? 1,
+    thresholdsFromSettings(state.value?.settings),
   ),
 );
 
 const fill = computed(() => {
   if (m.value.tone === "bad") return "#ff3b30";
   if (m.value.tone === "warn") return "#ff9f0a";
-  return "#007aff";
+  return "#34c759";
 });
+
+const statusText = computed(() => statusLabel(m.value.tone));
 
 const showRows = computed(() => m.value.rows.length > 1);
 
@@ -99,7 +101,7 @@ onUnmounted(() => {
         <span class="dot" />
         <span class="hero">{{ m.hero }}</span>
       </div>
-      <span class="brand">{{ m.brand }}</span>
+      <span class="status-chip">{{ statusText }}</span>
     </div>
 
     <div class="body">
@@ -110,7 +112,7 @@ onUnmounted(() => {
       </div>
 
       <div v-if="showRows" class="sites">
-        <div v-for="row in m.rows" :key="row.name" class="site">
+        <div v-for="row in m.rows" :key="row.name" class="site" :class="row.tone">
           <span class="site-name">{{ row.name }}</span>
           <span class="site-val">{{ row.value }}</span>
         </div>
@@ -164,6 +166,20 @@ onUnmounted(() => {
   cursor: grabbing;
 }
 
+.pill.warn {
+  background:
+    linear-gradient(180deg, rgba(255, 214, 10, 0.28), rgba(255, 255, 255, 0.18)),
+    rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 159, 10, 0.45);
+}
+
+.pill.bad {
+  background:
+    linear-gradient(180deg, rgba(255, 59, 48, 0.26), rgba(255, 255, 255, 0.16)),
+    rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 59, 48, 0.42);
+}
+
 .pill:hover,
 .pill.open {
   width: 268px;
@@ -173,6 +189,20 @@ onUnmounted(() => {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.3)),
     rgba(255, 255, 255, 0.28);
+}
+
+.pill.warn:hover,
+.pill.warn.open {
+  background:
+    linear-gradient(180deg, rgba(255, 214, 10, 0.38), rgba(255, 255, 255, 0.26)),
+    rgba(255, 255, 255, 0.28);
+}
+
+.pill.bad:hover,
+.pill.bad.open {
+  background:
+    linear-gradient(180deg, rgba(255, 59, 48, 0.34), rgba(255, 255, 255, 0.22)),
+    rgba(255, 255, 255, 0.26);
 }
 
 .pill.rows:hover,
@@ -230,12 +260,27 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.brand {
+.status-chip {
   font-size: 11px;
-  font-weight: 510;
-  letter-spacing: 0.04em;
-  color: rgba(29, 29, 31, 0.42);
+  font-weight: 620;
+  letter-spacing: 0.02em;
+  color: #248a3d;
   flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.pill.warn .status-chip,
+.pill.warn .hero {
+  color: #c93400;
+}
+
+.pill.bad .status-chip,
+.pill.bad .hero {
+  color: #d70015;
+}
+
+.pill.muted .status-chip {
+  color: rgba(29, 29, 31, 0.42);
 }
 
 .body {
@@ -311,6 +356,14 @@ onUnmounted(() => {
   font-weight: 560;
   color: rgba(29, 29, 31, 0.78);
   flex-shrink: 0;
+}
+
+.site.warn .site-val {
+  color: #c93400;
+}
+
+.site.bad .site-val {
+  color: #d70015;
 }
 
 .foot {

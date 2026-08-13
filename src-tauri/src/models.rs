@@ -42,6 +42,23 @@ pub struct AppSettings {
     pub refresh_interval_secs: u64,
     #[serde(default = "default_low_balance")]
     pub low_balance_threshold: f64,
+    /// Warn when remaining USD is below this (still above critical).
+    #[serde(default = "default_warn_balance")]
+    pub warn_balance_usd: f64,
+    /// Critical / red when remaining USD is below this.
+    #[serde(default = "default_critical_balance")]
+    pub critical_balance_usd: f64,
+    /// Kept for older config files; unused by the HUD.
+    #[serde(default = "default_warn_health")]
+    pub warn_health_pct: f64,
+    #[serde(default = "default_critical_health")]
+    pub critical_health_pct: f64,
+    /// Warn when available accounts are at or below this count.
+    #[serde(default = "default_warn_available")]
+    pub warn_available_count: i64,
+    /// Critical when available accounts are at or below this count.
+    #[serde(default = "default_critical_available")]
+    pub critical_available_count: i64,
     #[serde(default)]
     pub sites: Vec<SiteConfig>,
     /// Last HUD position in logical pixels (so drag survives hide/show).
@@ -59,11 +76,41 @@ fn default_low_balance() -> f64 {
     1.0
 }
 
+fn default_warn_balance() -> f64 {
+    5.0
+}
+
+fn default_critical_balance() -> f64 {
+    1.0
+}
+
+fn default_warn_health() -> f64 {
+    80.0
+}
+
+fn default_critical_health() -> f64 {
+    50.0
+}
+
+fn default_warn_available() -> i64 {
+    5
+}
+
+fn default_critical_available() -> i64 {
+    2
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             refresh_interval_secs: default_refresh(),
             low_balance_threshold: default_low_balance(),
+            warn_balance_usd: default_warn_balance(),
+            critical_balance_usd: default_critical_balance(),
+            warn_health_pct: default_warn_health(),
+            critical_health_pct: default_critical_health(),
+            warn_available_count: default_warn_available(),
+            critical_available_count: default_critical_available(),
             sites: Vec::new(),
             panel_x: None,
             panel_y: None,
@@ -207,6 +254,12 @@ pub struct AppStateView {
 pub struct AppSettingsPublic {
     pub refresh_interval_secs: u64,
     pub low_balance_threshold: f64,
+    pub warn_balance_usd: f64,
+    pub critical_balance_usd: f64,
+    pub warn_health_pct: f64,
+    pub critical_health_pct: f64,
+    pub warn_available_count: i64,
+    pub critical_available_count: i64,
     pub sites: Vec<SitePublic>,
 }
 
@@ -238,6 +291,18 @@ pub struct SettingsUpdate {
     pub refresh_interval_secs: Option<u64>,
     #[serde(default)]
     pub low_balance_threshold: Option<f64>,
+    #[serde(default)]
+    pub warn_balance_usd: Option<f64>,
+    #[serde(default)]
+    pub critical_balance_usd: Option<f64>,
+    #[serde(default)]
+    pub warn_health_pct: Option<f64>,
+    #[serde(default)]
+    pub critical_health_pct: Option<f64>,
+    #[serde(default)]
+    pub warn_available_count: Option<i64>,
+    #[serde(default)]
+    pub critical_available_count: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

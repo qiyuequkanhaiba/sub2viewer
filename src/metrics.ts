@@ -1,7 +1,32 @@
-import type { SiteSnapshot } from "./types";
+import type { SiteSnapshot, Thresholds } from "./types";
 import { formatUsd } from "./utils";
 
 export type Tone = "ok" | "warn" | "bad" | "info" | "muted";
+
+export const DEFAULT_THRESHOLDS: Thresholds = {
+  warnBalanceUsd: 5,
+  criticalBalanceUsd: 1,
+  warnAvailableCount: 5,
+  criticalAvailableCount: 2,
+};
+
+export function thresholdsFromSettings(
+  settings?: {
+    warnBalanceUsd?: number;
+    criticalBalanceUsd?: number;
+    warnAvailableCount?: number;
+    criticalAvailableCount?: number;
+    lowBalanceThreshold?: number;
+  } | null,
+): Thresholds {
+  const critical = settings?.criticalBalanceUsd ?? settings?.lowBalanceThreshold ?? 1;
+  return {
+    warnBalanceUsd: settings?.warnBalanceUsd ?? Math.max(5, critical),
+    criticalBalanceUsd: critical,
+    warnAvailableCount: settings?.warnAvailableCount ?? 5,
+    criticalAvailableCount: settings?.criticalAvailableCount ?? 2,
+  };
+}
 
 export interface RingSpec {
   id: string;
@@ -37,21 +62,38 @@ const C = {
   ok: "#30D158",
   cyan: "#64D2FF",
   blue: "#0A84FF",
-  purple: "#BF5AF2",
-  warn: "#FFD60A",
-  bad: "#FF453A",
+  warn: "#FF9F0A",
+  bad: "#FF3B30",
   track: "rgba(255,255,255,0.10)",
 };
 
-function toneOf(value: number, invert = false): Tone {
-  const v = invert ? 1 - value : value;
-  if (v < 0.2) return "bad";
-  if (v < 0.45) return "warn";
+function toneFromBalance(remaining: number, t: Thresholds): Tone {
+  if (remaining < 0) return "ok"; // unlimited
+  if (remaining <= t.criticalBalanceUsd) return "bad";
+  if (remaining <= t.warnBalanceUsd) return "warn";
   return "ok";
+}
+
+function toneFromAvailable(available: number, t: Thresholds): Tone {
+  if (available <= t.criticalAvailableCount) return "bad";
+  if (available <= t.warnAvailableCount) return "warn";
+  return "ok";
+}
+
+function worstTone(a: Tone, b: Tone): Tone {
+  const rank = { muted: 0, info: 1, ok: 2, warn: 3, bad: 4 };
+  return rank[a] >= rank[b] ? a : b;
 }
 
 function clamp01(n: number) {
   return Math.min(1, Math.max(0, n));
+}
+
+export function statusLabel(tone: Tone): string {
+  if (tone === "bad") return "告警";
+  if (tone === "warn") return "预警";
+  if (tone === "muted") return "未配置";
+  return "正常";
 }
 
 export interface SiteRow {
@@ -75,7 +117,7 @@ export interface MergedMetricView {
 
 export function mergeMetrics(
   snapshots: SiteSnapshot[],
-  lowBalanceThreshold: number,
+  thresholds: Thresholds,
 ): MergedMetricView {
   if (!snapshots.length) {
     return {
@@ -90,12 +132,9 @@ export function mergeMetrics(
     };
   }
 
-  const parts = snapshots.map((s) => siteMetric(s, lowBalanceThreshold));
-  const worst: Tone = parts.some((p) => p.tone === "bad")
-    ? "bad"
-    : parts.some((p) => p.tone === "warn")
-      ? "warn"
-      : "ok";
+  const parts = snapshots.map((s) => siteMetric(s, thresholds));
+  let worst: Tone = "ok";
+  for (const p of parts) worst = worstTone(worst, p.tone);
 
   let balance = 0;
   let hasBalance = false;
@@ -115,14 +154,26 @@ export function mergeMetrics(
         hasBalance = true;
       }
       today += snap.user.today?.cost ?? snap.user.today?.actualCost ?? 0;
-      if (snap.user.error) errors.push(snap.user.error);
+      // Only a hard failure (no usable remaining) counts as an error for color.
+      if (snap.user.error && snap.user.remaining == null && snap.user.balance == null) {
+        errors.push(snap.user.error);
+      }
     }
     if (snap.admin) {
       hasAdmin = true;
       avail += snap.admin.availableAccounts;
       totalAcc += snap.admin.totalAccounts;
-      if (snap.admin.error) errors.push(snap.admin.error);
+      if (snap.admin.error && snap.admin.totalAccounts <= 0) {
+        errors.push(snap.admin.error);
+      }
     }
+  }
+
+  if (hasBalance && !unlimited) {
+    worst = worstTone(worst, toneFromBalance(balance, thresholds));
+  }
+  if (hasAdmin) {
+    worst = worstTone(worst, toneFromAvailable(avail, thresholds));
   }
 
   let hero = "—";
@@ -143,7 +194,7 @@ export function mergeMetrics(
     (detailBits.length ? detailBits.join("  ·  ") : `${parts.length} 个站点`);
 
   return {
-    tone: errors.length ? "bad" : worst,
+    tone: worst,
     hero,
     brand: "Sub2",
     detail,
@@ -151,9 +202,7 @@ export function mergeMetrics(
     footerLeft: `${parts.length} 个站点`,
     footerRight: errors.length
       ? `${errors.length} 项异常`
-      : worst === "ok"
-        ? "运行正常"
-        : "需关注",
+      : statusLabel(worst),
     error: errors[0],
     rows: parts.map((p) => ({
       name: p.brand || p.title,
@@ -166,17 +215,17 @@ export function mergeMetrics(
 
 export function siteMetric(
   snapshot: SiteSnapshot,
-  lowBalanceThreshold: number,
+  thresholds: Thresholds,
 ): SiteMetricView {
   if (snapshot.site.role === "admin") {
-    return adminMetric(snapshot, lowBalanceThreshold);
+    return adminMetric(snapshot, thresholds);
   }
-  return userMetric(snapshot, lowBalanceThreshold);
+  return userMetric(snapshot, thresholds);
 }
 
 function userMetric(
   snapshot: SiteSnapshot,
-  lowBalanceThreshold: number,
+  thresholds: Thresholds,
 ): SiteMetricView {
   const u = snapshot.user;
   const title = snapshot.site.name;
@@ -203,53 +252,22 @@ function userMetric(
     };
   }
 
-  const remaining = u.remaining ?? u.balance ?? 0;
+  const remainingRaw = u.remaining ?? u.balance;
+  const remaining = remainingRaw ?? 0;
   const totalUsed = u.total?.cost ?? u.total?.actualCost ?? 0;
-  const today = u.today?.cost ?? u.today?.actualCost ?? 0;
 
   let remainRatio = 0;
   if (remaining < 0) remainRatio = 1;
   else if (totalUsed + remaining > 0) remainRatio = remaining / (remaining + totalUsed);
-  else remainRatio = clamp01(remaining / Math.max(lowBalanceThreshold * 10, 5));
+  else remainRatio = clamp01(remaining / Math.max(thresholds.warnBalanceUsd, 1));
 
-  let dayRemain = 1;
-  const ticks: TickSpec[] = [];
-
-  if (u.subscription?.dailyLimitUsd && u.subscription.dailyLimitUsd > 0) {
-    const used = clamp01(u.subscription.dailyUsageUsd / u.subscription.dailyLimitUsd);
-    dayRemain = 1 - used;
-    ticks.push({ id: "d", label: "日", value: used, tone: toneOf(used, true) });
-    if (u.subscription.weeklyLimitUsd && u.subscription.weeklyLimitUsd > 0) {
-      const w = clamp01(u.subscription.weeklyUsageUsd / u.subscription.weeklyLimitUsd);
-      ticks.push({ id: "w", label: "周", value: w, tone: toneOf(w, true) });
-    }
-    if (u.subscription.monthlyLimitUsd && u.subscription.monthlyLimitUsd > 0) {
-      const m = clamp01(u.subscription.monthlyUsageUsd / u.subscription.monthlyLimitUsd);
-      ticks.push({ id: "m", label: "月", value: m, tone: toneOf(m, true) });
-    }
-  } else if (u.rateLimits?.length) {
-    const first = u.rateLimits[0];
-    const used = first.limit > 0 ? clamp01(first.used / first.limit) : 0;
-    dayRemain = 1 - used;
-    for (const rl of u.rateLimits.slice(0, 3)) {
-      const v = rl.limit > 0 ? clamp01(rl.used / rl.limit) : 0;
-      ticks.push({
-        id: rl.window,
-        label: rl.window,
-        value: v,
-        tone: toneOf(v, true),
-      });
-    }
-  } else {
-    const denom = remaining + today;
-    const used = denom > 0 ? clamp01(today / denom) : 0;
-    dayRemain = 1 - used;
-    ticks.push({ id: "today", label: "今日", value: used, tone: toneOf(used, true) });
-  }
-
-  const low = remaining >= 0 && remaining < lowBalanceThreshold;
-  const tone: Tone = !u.isValid || low ? "bad" : toneOf(remainRatio);
-  const hero = remaining < 0 ? "∞" : formatUsd(remaining);
+  // Color follows only the user-configured balance threshold.
+  // Missing remaining (and a valid key) is treated as OK, not $0.
+  const tone: Tone =
+    remainingRaw == null
+      ? "ok"
+      : toneFromBalance(remainingRaw, thresholds);
+  const hero = remainingRaw == null ? "—" : remaining < 0 ? "∞" : formatUsd(remaining);
 
   let detail = "";
   if (u.subscription?.dailyLimitUsd && u.subscription.dailyLimitUsd > 0) {
@@ -267,8 +285,7 @@ function userMetric(
     );
     footerLeft = days > 0 ? `${days}天后到期` : "已到期";
   }
-  const footerRight =
-    today > 0 ? `今日 ${formatUsd(today)}` : u.rpm != null ? `RPM ${u.rpm.toFixed(1)}` : "实时";
+  const footerRight = statusLabel(tone);
 
   return {
     title,
@@ -276,17 +293,9 @@ function userMetric(
     hero,
     unit: "USD",
     tone,
-    rings: [
-      {
-        id: "bal",
-        value: remainRatio,
-        color: tone === "bad" ? C.bad : tone === "warn" ? C.warn : C.ok,
-        track: C.track,
-      },
-      { id: "day", value: dayRemain, color: C.cyan, track: C.track },
-    ],
-    ticks: ticks.slice(0, 3),
-    error: u.isValid ? undefined : u.status || "异常",
+    rings: [],
+    ticks: [],
+    error: undefined,
     brand: title,
     detail,
     remainPct: Math.round(remainRatio * 100),
@@ -295,54 +304,35 @@ function userMetric(
   };
 }
 
-function adminMetric(snapshot: SiteSnapshot, _low: number): SiteMetricView {
+function adminMetric(
+  snapshot: SiteSnapshot,
+  thresholds: Thresholds,
+): SiteMetricView {
   const a = snapshot.admin;
   const title = snapshot.site.name;
   const subtitle = "健康";
 
-  if (!a || a.error) {
+  if (!a || (a.error && a.totalAccounts <= 0)) {
     return {
       title,
       subtitle,
       hero: "—",
       unit: "可用",
       tone: "bad",
-      rings: [
-        { id: "ok", value: 0, color: C.ok, track: C.track },
-        { id: "rl", value: 0, color: C.warn, track: C.track },
-      ],
+      rings: [],
       ticks: [],
       error: a?.error || "无数据",
       brand: title,
       detail: a?.error || "无法读取健康度",
       remainPct: 0,
       footerLeft: "需重新登录",
-      footerRight: "",
+      footerRight: "告警",
     };
   }
 
   const total = a.totalAccounts || 0;
-  const avail = total > 0 ? a.availableAccounts / total : 0;
-  const rl = total > 0 ? a.rateLimitedAccounts / total : 0;
-  const err = total > 0 ? a.errorAccounts / total : 0;
-  const tone: Tone = a.errorAccounts > 0 || avail < 0.5 ? "bad" : avail < 0.8 ? "warn" : "ok";
-
-  const ticks: TickSpec[] = a.groups.slice(0, 4).map((g) => {
-    const r = g.total > 0 ? g.available / g.total : 0;
-    return {
-      id: String(g.groupId),
-      label: g.groupName,
-      value: 1 - r,
-      tone: g.error > 0 ? "bad" : r < 0.6 ? "warn" : "ok",
-    };
-  });
-
-  if (!ticks.length) {
-    ticks.push(
-      { id: "err", label: "异常", value: err, tone: err > 0.1 ? "bad" : err > 0 ? "warn" : "ok" },
-      { id: "rl", label: "限速", value: rl, tone: rl > 0.2 ? "warn" : "info" },
-    );
-  }
+  const available = a.availableAccounts;
+  const tone = toneFromAvailable(available, thresholds);
 
   return {
     title,
@@ -350,17 +340,13 @@ function adminMetric(snapshot: SiteSnapshot, _low: number): SiteMetricView {
     hero: total ? `${a.availableAccounts}/${total}` : "0",
     unit: "可用",
     tone,
-    rings: [
-      { id: "ok", value: avail, color: C.ok, track: C.track },
-      { id: "rl", value: 1 - rl, color: C.warn, track: C.track },
-      { id: "er", value: 1 - err, color: C.bad, track: C.track },
-    ],
-    ticks: ticks.slice(0, 3),
+    rings: [],
+    ticks: [],
     error: undefined,
     brand: title,
     detail: total ? `可用账号 ${a.availableAccounts} / ${total}` : "暂无账号",
-    remainPct: Math.round(avail * 100),
+    remainPct: total > 0 ? Math.round((available / total) * 100) : 0,
     footerLeft: a.errorAccounts ? `异常 ${a.errorAccounts}` : "运行正常",
-    footerRight: a.rateLimitedAccounts ? `限速 ${a.rateLimitedAccounts}` : `${a.groups.length} 组`,
+    footerRight: statusLabel(tone),
   };
 }
