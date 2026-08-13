@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/tauri.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sub2Viewer</title>
+    <script>
+      (function () {
+        var settings = /[?&]view=settings/.test(location.search);
+        if (!settings) {
+          document.documentElement.classList.add("panel-mode");
+          document.documentElement.style.background = "transparent";
+        }
+      })();
+    </script>
+    <style>
+      html.panel-mode,
+      html.panel-mode body,
+      html.panel-mode #app {
+        background: transparent !important;
+        color-scheme: only light;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
