@@ -106,6 +106,8 @@ export interface SiteRow {
 export interface MergedMetricView {
   tone: Tone;
   hero: string;
+  heroBalance?: string;
+  heroAccounts?: string;
   brand: string;
   detail: string;
   remainPct: number;
@@ -176,10 +178,10 @@ export function mergeMetrics(
     worst = worstTone(worst, toneFromAvailable(avail, thresholds));
   }
 
-  let hero = "—";
-  if (unlimited && !hasBalance) hero = "∞";
-  else if (hasBalance) hero = formatUsd(balance);
-  else if (hasAdmin) hero = totalAcc ? `${avail}/${totalAcc}` : "0";
+  const heroBalance =
+    unlimited && !hasBalance ? "∞" : hasBalance ? formatUsd(balance) : undefined;
+  const heroAccounts = hasAdmin ? (totalAcc ? `${avail}/${totalAcc}` : "0") : undefined;
+  const hero = [heroBalance, heroAccounts].filter(Boolean).join("  ") || "—";
 
   const remainPct = Math.round(
     parts.reduce((a, p) => a + p.remainPct, 0) / parts.length,
@@ -196,6 +198,8 @@ export function mergeMetrics(
   return {
     tone: worst,
     hero,
+    heroBalance,
+    heroAccounts,
     brand: "Sub2",
     detail,
     remainPct,

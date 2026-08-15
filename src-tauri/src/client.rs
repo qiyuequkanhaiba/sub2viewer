@@ -413,15 +413,9 @@ impl Sub2Client {
             .unwrap_or(true);
 
         let mut groups: Vec<GroupHealth> = Vec::new();
-        let mut total = 0i64;
-        let mut available = 0i64;
-        let mut errors = 0i64;
-        let mut rate_limited = 0i64;
-        let mut status_breakdown: HashMap<String, i64> = HashMap::new();
-
         if let Some(group_map) = data.get("group").and_then(|v| v.as_object()) {
             for (_k, v) in group_map {
-                let g = GroupHealth {
+                groups.push(GroupHealth {
                     group_id: v.get("group_id").and_then(|x| x.as_i64()).unwrap_or(0),
                     group_name: v
                         .get("group_name")
@@ -442,51 +436,58 @@ impl Sub2Client {
                         .and_then(|x| x.as_i64())
                         .unwrap_or(0),
                     error: v.get("error_count").and_then(|x| x.as_i64()).unwrap_or(0),
-                };
-                total += g.total;
-                available += g.available;
-                errors += g.error;
-                rate_limited += g.rate_limited;
-                groups.push(g);
+                });
             }
         }
 
-        // Prefer account-level for accurate status breakdown / totals
-        if let Some(account_map) = data.get("account").and_then(|v| v.as_object()) {
-            total = 0;
-            available = 0;
-            errors = 0;
-            rate_limited = 0;
-            status_breakdown.clear();
-            for (_k, v) in account_map {
-                total += 1;
-                let status = v
-                    .get("status")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                *status_breakdown.entry(status).or_insert(0) += 1;
-                if v.get("is_available").and_then(|x| x.as_bool()).unwrap_or(false) {
-                    available += 1;
-                }
-                if v.get("has_error").and_then(|x| x.as_bool()).unwrap_or(false) {
-                    errors += 1;
-                }
-                if v
-                    .get("is_rate_limited")
-                    .and_then(|x| x.as_bool())
-                    .unwrap_or(false)
-                {
-                    rate_limited += 1;
-                }
+        // Never sum group totals: one account in two groups would be counted twice
+        // (often +1). Unique account_id is the source of truth.
+        let mut total = 0i64;
+        let mut available = 0i64;
+        let mut errors = 0i64;
+        let mut rate_limited = 0i64;
+        let mut status_breakdown: HashMap<String, i64> = HashMap::new();
+        let mut seen: HashMap<i64, ()> = HashMap::new();
+
+        let account_map = data.get("account").and_then(|v| v.as_object());
+        if account_map.is_none() || account_map.is_some_and(|m| m.is_empty()) {
+            return Err(ClientError::Message(
+                "availability has no unique account list".into(),
+            ));
+        }
+
+        for (k, v) in account_map.unwrap() {
+            if !v.is_object() {
+                continue;
             }
-        } else {
-            *status_breakdown.entry("available".into()).or_insert(0) = available;
-            *status_breakdown.entry("rate_limit".into()).or_insert(0) = rate_limited;
-            *status_breakdown.entry("error".into()).or_insert(0) = errors;
-            let other = (total - available - rate_limited - errors).max(0);
-            if other > 0 {
-                *status_breakdown.entry("other".into()).or_insert(0) = other;
+            let id = v
+                .get("account_id")
+                .and_then(|x| x.as_i64())
+                .or_else(|| k.parse::<i64>().ok())
+                .unwrap_or(0);
+            if id <= 0 || seen.contains_key(&id) {
+                continue;
+            }
+            seen.insert(id, ());
+            total += 1;
+            let status = v
+                .get("status")
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            *status_breakdown.entry(status).or_insert(0) += 1;
+            if v.get("is_available").and_then(|x| x.as_bool()).unwrap_or(false) {
+                available += 1;
+            }
+            if v.get("has_error").and_then(|x| x.as_bool()).unwrap_or(false) {
+                errors += 1;
+            }
+            if v
+                .get("is_rate_limited")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false)
+            {
+                rate_limited += 1;
             }
         }
 
@@ -548,6 +549,26 @@ impl Sub2Client {
         let mut rate_limited = 0i64;
 
         for acc in &items {
+            let id = acc
+                .get("id")
+                .or_else(|| acc.get("account_id"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            if id <= 0 {
+                continue;
+            }
+            let acc_type = acc
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if acc_type.contains("shadow") {
+                continue;
+            }
+            if acc.get("deleted_at").map(|v| !v.is_null()).unwrap_or(false) {
+                continue;
+            }
+
             let status = acc
                 .get("status")
                 .and_then(|v| v.as_str())
@@ -635,7 +656,7 @@ impl Sub2Client {
 
         let mut groups: Vec<GroupHealth> = group_map.into_values().collect();
         groups.sort_by(|a, b| a.group_name.cmp(&b.group_name));
-        let total = items.len() as i64;
+        let total = status_breakdown.values().sum::<i64>();
 
         Ok(AdminSnapshot {
             site_id: String::new(),

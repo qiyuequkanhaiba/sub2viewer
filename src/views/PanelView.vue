@@ -99,7 +99,10 @@ onUnmounted(() => {
     <div class="head">
       <div class="lead">
         <span class="dot" />
-        <span class="hero">{{ m.hero }}</span>
+        <span v-if="m.heroBalance" class="hero money">{{ m.heroBalance }}</span>
+        <span v-if="m.heroBalance && m.heroAccounts" class="sep">·</span>
+        <span v-if="m.heroAccounts" class="hero accounts">{{ m.heroAccounts }}</span>
+        <span v-if="!m.heroBalance && !m.heroAccounts" class="hero">{{ m.hero }}</span>
       </div>
       <span class="status-chip">{{ statusText }}</span>
     </div>
@@ -129,9 +132,9 @@ onUnmounted(() => {
 <style scoped>
 .pill {
   box-sizing: border-box;
-  width: 156px;
-  height: 38px;
-  padding: 0 14px;
+  width: 188px;
+  height: 36px;
+  padding: 0 12px;
   margin: 0;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.2)),
@@ -214,14 +217,14 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 38px;
-  gap: 10px;
+  height: 36px;
+  gap: 8px;
 }
 
 .lead {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
   min-width: 0;
 }
 
@@ -250,9 +253,9 @@ onUnmounted(() => {
 }
 
 .hero {
-  font-size: 15px;
-  font-weight: 590;
-  letter-spacing: -0.35px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.25px;
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
   overflow: hidden;
@@ -260,13 +263,29 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.status-chip {
+.sep {
   font-size: 11px;
+  color: rgba(29, 29, 31, 0.28);
+  flex-shrink: 0;
+}
+
+.status-chip {
+  font-size: 10px;
   font-weight: 620;
   letter-spacing: 0.02em;
   color: #248a3d;
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+.pill:hover .hero,
+.pill.open .hero {
+  font-size: 15px;
+}
+
+.pill:hover .status-chip,
+.pill.open .status-chip {
+  font-size: 11px;
 }
 
 .pill.warn .status-chip,

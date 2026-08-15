@@ -1,6 +1,6 @@
 [package]
 name = "sub2viewer"
-version = "0.1.0"
+version = "0.1.1"
 description = "Sub2API multi-site balance & health monitor for macOS menu bar"
 authors = ["sub2viewer"]
 edition = "2021"
