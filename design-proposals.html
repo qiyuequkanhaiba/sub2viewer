@@ -1,0 +1,2141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sub2Viewer - iOS / macOS 原生美化设计方案评估 (全功能完整版)</title>
+  <style>
+    :root {
+      --font-system: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
+      --font-mono: "SF Mono", Menlo, Monaco, Consolas, monospace;
+      --bg-canvas: #090a0f;
+      --text-main: #f5f5f7;
+      --text-muted: #86868b;
+      --accent-apple: #0071e3;
+      --accent-hover: #0077ed;
+      --border-subtle: rgba(255, 255, 255, 0.12);
+      --ease-apple: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      font-family: var(--font-system);
+      background-color: var(--bg-canvas);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(at 15% 15%, rgba(0, 113, 227, 0.15) 0px, transparent 50%),
+        radial-gradient(at 85% 85%, rgba(175, 82, 222, 0.12) 0px, transparent 50%),
+        radial-gradient(at 50% 50%, rgba(52, 199, 89, 0.08) 0px, transparent 60%);
+      background-attachment: fixed;
+    }
+
+    /* Top Navigation Header */
+    header.hero-header {
+      padding: 20px 32px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: rgba(13, 15, 22, 0.75);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+    }
+
+    .header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .brand-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .app-icon-badge {
+      width: 36px;
+      height: 36px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, #0A84FF, #5E5CE6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 12px rgba(10, 132, 255, 0.35);
+    }
+
+    .app-icon-badge svg {
+      width: 20px;
+      height: 20px;
+      fill: #fff;
+    }
+
+    .brand-title h1 {
+      font-size: 19px;
+      font-weight: 600;
+      letter-spacing: -0.4px;
+    }
+
+    .brand-title span {
+      font-size: 12px;
+      color: #34c759;
+      margin-left: 6px;
+      background: rgba(52, 199, 89, 0.12);
+      border: 1px solid rgba(52, 199, 89, 0.3);
+      padding: 2px 8px;
+      border-radius: 12px;
+    }
+
+    .global-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* Scenario Simulation Switcher */
+    .scenario-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      padding: 4px 8px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 12px;
+    }
+
+    .scenario-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      padding: 4px 10px;
+      font-size: 11px;
+      font-weight: 500;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .scenario-btn:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .scenario-btn.active {
+      background: rgba(255, 255, 255, 0.18);
+      color: #fff;
+      font-weight: 600;
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+
+    /* Segmented Control */
+    .segmented-control {
+      display: flex;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 10px;
+      padding: 3px;
+      gap: 2px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .segment-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: all 0.2s var(--ease-apple);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .segment-btn:hover {
+      color: var(--text-main);
+    }
+
+    .segment-btn.active {
+      background: rgba(255, 255, 255, 0.2);
+      color: #ffffff;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+      font-weight: 600;
+    }
+
+    /* Proposal Tabs */
+    .proposal-tabs {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+
+    .tab-pill {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+      padding: 7px 15px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+      transition: all 0.25s var(--ease-apple);
+    }
+
+    .tab-pill:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text-main);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .tab-pill.active {
+      background: #0071e3;
+      border-color: #0071e3;
+      color: #ffffff;
+      font-weight: 600;
+      box-shadow: 0 4px 14px rgba(0, 113, 227, 0.4);
+    }
+
+    .tab-pill .tag {
+      font-size: 10px;
+      opacity: 0.85;
+      background: rgba(0, 0, 0, 0.25);
+      padding: 1px 6px;
+      border-radius: 10px;
+    }
+
+    /* Main Container */
+    main.content-area {
+      flex: 1;
+      padding: 28px 32px;
+      max-width: 1440px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .proposal-container {
+      display: none;
+      animation: fadeIn 0.35s var(--ease-apple);
+    }
+
+    .proposal-container.active {
+      display: block;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Scheme Overview Banner */
+    .scheme-banner {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 20px 24px;
+      margin-bottom: 28px;
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 24px;
+      backdrop-filter: blur(16px);
+    }
+
+    .scheme-desc h2 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .scheme-desc p {
+      color: var(--text-muted);
+      font-size: 13px;
+      line-height: 1.6;
+      margin-bottom: 12px;
+    }
+
+    .feature-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .feature-chip {
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 3px 9px;
+      border-radius: 6px;
+      font-size: 11px;
+      color: #d1d1d6;
+    }
+
+    .palette-box {
+      border-left: 1px solid var(--border-subtle);
+      padding-left: 20px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    .palette-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .color-swatches {
+      display: flex;
+      gap: 8px;
+    }
+
+    .swatch {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      position: relative;
+    }
+
+    .swatch::after {
+      content: attr(data-name);
+      position: absolute;
+      bottom: -16px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 8px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    /* Live Preview Section */
+    .preview-grid {
+      display: grid;
+      grid-template-columns: 390px 1fr;
+      gap: 28px;
+      align-items: start;
+    }
+
+    .section-headline {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.2px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: #e5e5ea;
+    }
+
+    .preview-column {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    /* Simulated Desktop Wallpaper Background for HUD */
+    .wallpaper-stage {
+      border-radius: 18px;
+      padding: 44px 20px;
+      min-height: 490px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    }
+
+    /* Wallpaper Styles */
+    .wp-sequoia {
+      background: 
+        radial-gradient(circle at 80% 20%, rgba(255, 115, 0, 0.45), transparent 45%),
+        radial-gradient(circle at 20% 80%, rgba(0, 122, 255, 0.45), transparent 45%),
+        linear-gradient(135deg, #182848 0%, #4b6cb7 100%);
+    }
+
+    .wp-vision {
+      background: 
+        radial-gradient(circle at 50% 30%, rgba(138, 43, 226, 0.45), transparent 55%),
+        radial-gradient(circle at 80% 80%, rgba(0, 242, 254, 0.35), transparent 50%),
+        linear-gradient(135deg, #090a0f 0%, #151a2e 100%);
+    }
+
+    .wp-ios {
+      background: 
+        radial-gradient(circle at 20% 20%, rgba(255, 45, 85, 0.35), transparent 45%),
+        radial-gradient(circle at 80% 80%, rgba(88, 86, 214, 0.35), transparent 45%),
+        linear-gradient(145deg, #1c1c1e 0%, #2c2c2e 100%);
+    }
+
+    .wp-studio {
+      background: 
+        radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.05), transparent 60%),
+        linear-gradient(180deg, #121316 0%, #0d0e11 100%);
+    }
+
+    /* Stage Header Bar */
+    .simulated-menubar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 28px;
+      background: rgba(0, 0, 0, 0.28);
+      backdrop-filter: blur(15px);
+      -webkit-backdrop-filter: blur(15px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.85);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      user-select: none;
+    }
+
+    .menubar-left {
+      display: flex;
+      gap: 12px;
+      font-weight: 500;
+    }
+
+    .menubar-right {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      font-size: 10px;
+    }
+
+    .interactive-tip {
+      position: absolute;
+      bottom: 12px;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.7);
+      background: rgba(0, 0, 0, 0.4);
+      padding: 4px 12px;
+      border-radius: 12px;
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    /* ========================================================= */
+    /* SCHEME 1: macOS Sequoia Native Glass & Dynamic Island     */
+    /* ========================================================= */
+    .hud-s1 {
+      box-sizing: border-box;
+      width: 228px;
+      height: 38px;
+      padding: 0 14px;
+      background: rgba(255, 255, 255, 0.18);
+      backdrop-filter: blur(28px) saturate(200%);
+      -webkit-backdrop-filter: blur(28px) saturate(200%);
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      border-top: 1px solid rgba(255, 255, 255, 0.7);
+      border-radius: 20px;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+      color: #ffffff;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.4s var(--ease-apple);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .hud-s1:hover, .hud-s1.expanded {
+      width: 320px;
+      height: 250px;
+      border-radius: 22px;
+      padding: 12px 18px 16px;
+      background: rgba(255, 255, 255, 0.24);
+      box-shadow: 0 24px 54px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    }
+
+    .hud-s1 .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 38px;
+      flex-shrink: 0;
+    }
+
+    .hud-s1.expanded .head, .hud-s1:hover .head {
+      height: 32px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+      padding-bottom: 6px;
+    }
+
+    .hud-s1 .lead {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #34c759;
+      box-shadow: 0 0 8px rgba(52, 199, 89, 0.8);
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    .status-dot.pulse::after {
+      content: "";
+      position: absolute;
+      inset: -2px;
+      border-radius: 50%;
+      border: 1px solid #34c759;
+      animation: ripple 2s infinite ease-out;
+    }
+
+    @keyframes ripple {
+      0% { transform: scale(1); opacity: 0.8; }
+      100% { transform: scale(2.2); opacity: 0; }
+    }
+
+    .hero-val {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: -0.25px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .hero-accounts {
+      font-size: 12px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.9);
+      letter-spacing: -0.2px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .status-badge {
+      font-size: 10px;
+      font-weight: 600;
+      color: #34c759;
+      background: rgba(52, 199, 89, 0.18);
+      padding: 2px 7px;
+      border-radius: 6px;
+      border: 1px solid rgba(52, 199, 89, 0.35);
+      white-space: nowrap;
+    }
+
+    .hud-s1 .body-content {
+      opacity: 0;
+      transform: translateY(6px);
+      transition: all 0.3s var(--ease-apple) 0.05s;
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+
+    .hud-s1:hover .body-content, .hud-s1.expanded .body-content {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .summary-text {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.75);
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .usage-grid-s1 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .usage-card-s1 {
+      background: rgba(0, 0, 0, 0.16);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 10px;
+      padding: 6px 10px;
+    }
+
+    .usage-card-s1 .label {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.6);
+      font-weight: 500;
+    }
+
+    .usage-card-s1 .val {
+      font-size: 13px;
+      font-weight: 700;
+      color: #fff;
+      margin-top: 1px;
+    }
+
+    .site-list-box {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .site-row-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(0, 0, 0, 0.14);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 5px 9px;
+      font-size: 11px;
+    }
+
+    .site-row-item .site-info {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .site-type-tag {
+      font-size: 9px;
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.12);
+      color: rgba(255, 255, 255, 0.8);
+      font-weight: 500;
+    }
+
+    .site-type-tag.admin {
+      background: rgba(175, 82, 222, 0.25);
+      color: #d8b4fe;
+      border: 1px solid rgba(175, 82, 222, 0.4);
+    }
+
+    .site-type-tag.user {
+      background: rgba(10, 132, 255, 0.22);
+      color: #93c5fd;
+      border: 1px solid rgba(10, 132, 255, 0.4);
+    }
+
+    .site-row-item .site-name {
+      color: rgba(255, 255, 255, 0.9);
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .site-row-item .site-val {
+      font-weight: 650;
+      font-variant-numeric: tabular-nums;
+      flex-shrink: 0;
+    }
+
+    .hud-foot-line {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.55);
+      padding-top: 4px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    /* ========================================================= */
+    /* SCHEME 2: VisionOS Spatial Crystal & Multi-Gauge HUD      */
+    /* ========================================================= */
+    .hud-s2 {
+      width: 236px;
+      height: 42px;
+      padding: 0 16px;
+      background: linear-gradient(135deg, rgba(25, 28, 48, 0.72), rgba(15, 18, 30, 0.82));
+      backdrop-filter: blur(35px) saturate(220%);
+      -webkit-backdrop-filter: blur(35px) saturate(220%);
+      border: 1px solid rgba(138, 43, 226, 0.45);
+      border-top: 1px solid rgba(0, 242, 254, 0.6);
+      border-radius: 24px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(138, 43, 226, 0.3);
+      color: #ffffff;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.45s cubic-bezier(0.2, 1, 0.2, 1);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .hud-s2::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 15%; right: 15%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.9), transparent);
+    }
+
+    .hud-s2:hover, .hud-s2.expanded {
+      width: 326px;
+      height: 270px;
+      border-radius: 26px;
+      padding: 12px 18px 16px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.8), 0 0 30px rgba(138, 43, 226, 0.5);
+    }
+
+    .hud-s2 .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 42px;
+      flex-shrink: 0;
+    }
+
+    .hud-s2:hover .head, .hud-s2.expanded .head {
+      height: 34px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .hud-s2 .body-content {
+      opacity: 0;
+      transform: translateY(6px);
+      transition: all 0.3s var(--ease-apple) 0.05s;
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .hud-s2:hover .body-content, .hud-s2.expanded .body-content {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .crystal-pill-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      padding: 3px 8px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, rgba(52, 199, 89, 0.3), rgba(0, 242, 254, 0.3));
+      border: 1px solid rgba(52, 199, 89, 0.5);
+      color: #6ee7b7;
+      text-shadow: 0 0 6px rgba(110, 231, 183, 0.6);
+      white-space: nowrap;
+    }
+
+    /* Dual Activity Rings for Both User Balance & Admin Accounts */
+    .dual-gauge-container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .gauge-card {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 8px 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .gauge-ring-box {
+      position: relative;
+      width: 36px;
+      height: 36px;
+      flex-shrink: 0;
+    }
+
+    .gauge-ring-box svg {
+      transform: rotate(-90deg);
+    }
+
+    .gauge-ring-label {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .gauge-meta {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .gauge-meta .label {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    .gauge-meta .val {
+      font-size: 12px;
+      font-weight: 700;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* ========================================================= */
+    /* SCHEME 3: iOS 18 Modular Control Center                   */
+    /* ========================================================= */
+    .hud-s3 {
+      width: 236px;
+      height: 44px;
+      padding: 0 16px;
+      background: rgba(36, 36, 40, 0.92);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 22px;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+      color: #ffffff;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.38s var(--ease-apple);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .hud-s3:hover, .hud-s3.expanded {
+      width: 326px;
+      height: 260px;
+      border-radius: 28px;
+      padding: 14px 16px;
+      background: rgba(28, 28, 30, 0.96);
+    }
+
+    .hud-s3 .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 44px;
+      flex-shrink: 0;
+    }
+
+    .hud-s3:hover .head, .hud-s3.expanded .head {
+      height: 36px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .hud-s3 .body-content {
+      opacity: 0;
+      transform: translateY(6px);
+      transition: all 0.3s var(--ease-apple) 0.05s;
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .hud-s3:hover .body-content, .hud-s3.expanded .body-content {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .bento-icon-box {
+      width: 26px;
+      height: 26px;
+      border-radius: 8px;
+      background: #007AFF;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .bento-icon-box svg {
+      width: 14px;
+      height: 14px;
+      fill: #fff;
+    }
+
+    .bento-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .bento-tile {
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      height: 64px;
+      transition: background 0.2s;
+    }
+
+    .bento-tile .tile-title {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.6);
+      font-weight: 500;
+    }
+
+    .bento-tile .tile-metric {
+      font-size: 15px;
+      font-weight: 700;
+      color: #fff;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ========================================================= */
+    /* SCHEME 4: Apple Pro Studio / Monospaced Raycast Modern    */
+    /* ========================================================= */
+    .hud-s4 {
+      width: 216px;
+      height: 36px;
+      padding: 0 12px;
+      background: #111215;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+      color: #f0f0f2;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .hud-s4:hover, .hud-s4.expanded {
+      width: 310px;
+      height: 236px;
+      border-radius: 10px;
+      padding: 10px 14px;
+      background: #15161b;
+      border-color: rgba(255, 255, 255, 0.28);
+    }
+
+    .hud-s4 .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 36px;
+      flex-shrink: 0;
+    }
+
+    .hud-s4:hover .head, .hud-s4.expanded .head {
+      height: 28px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .hud-s4 .body-content {
+      opacity: 0;
+      transform: translateY(6px);
+      transition: all 0.3s var(--ease-apple) 0.05s;
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .hud-s4:hover .body-content, .hud-s4.expanded .body-content {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .tag-pro {
+      font-size: 9px;
+      color: #30d158;
+      background: rgba(48, 209, 88, 0.1);
+      padding: 1px 5px;
+      border-radius: 4px;
+      border: 1px solid rgba(48, 209, 88, 0.25);
+    }
+
+    .s4-table {
+      width: 100%;
+      font-size: 11px;
+      border-collapse: collapse;
+    }
+
+    .s4-table td {
+      padding: 4px 0;
+      border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
+    }
+
+    .s4-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    /* macOS Settings Window Mockup */
+    .mac-window-frame {
+      background: rgba(30, 32, 40, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 14px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+      backdrop-filter: blur(40px) saturate(180%);
+      -webkit-backdrop-filter: blur(40px) saturate(180%);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      height: 520px;
+    }
+
+    .window-titlebar {
+      height: 38px;
+      background: rgba(255, 255, 255, 0.04);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      position: relative;
+    }
+
+    .window-traffic-lights {
+      display: flex;
+      gap: 7px;
+    }
+
+    .tl-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .tl-red { background: #ff5f56; border: 1px solid #e0443e; }
+    .tl-yellow { background: #ffbd2e; border: 1px solid #dea123; }
+    .tl-green { background: #27c93f; border: 1px solid #1aab29; }
+
+    .window-title {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 13px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.9);
+      letter-spacing: -0.2px;
+    }
+
+    .window-layout-split {
+      display: grid;
+      grid-template-columns: 200px 1fr;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .window-sidebar {
+      background: rgba(0, 0, 0, 0.22);
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 12px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .sidebar-item {
+      padding: 7px 10px;
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.7);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .sidebar-item:hover {
+      background: rgba(255, 255, 255, 0.06);
+      color: #fff;
+    }
+
+    .sidebar-item.active {
+      background: #0071e3;
+      color: #ffffff;
+      font-weight: 600;
+    }
+
+    .sidebar-item svg {
+      width: 14px;
+      height: 14px;
+      fill: currentColor;
+    }
+
+    .window-main-content {
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .settings-group-card {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 14px 16px;
+    }
+
+    .group-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .group-card-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .settings-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      font-size: 12px;
+    }
+
+    .settings-row:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+
+    .settings-label {
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    .settings-desc {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .apple-input-box {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 6px;
+      color: #fff;
+      padding: 5px 8px;
+      font-size: 12px;
+      width: 70px;
+      text-align: right;
+      outline: none;
+    }
+
+    .btn-action {
+      background: #0071e3;
+      color: #fff;
+      border: none;
+      padding: 8px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .btn-action:hover {
+      background: #0077ed;
+    }
+
+    /* Comparison Matrix */
+    .comparison-section {
+      margin-top: 48px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border-subtle);
+      border-radius: 18px;
+      padding: 28px;
+    }
+
+    .comp-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      font-size: 13px;
+    }
+
+    .comp-table th, .comp-table td {
+      padding: 12px 14px;
+      text-align: left;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .comp-table th {
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .comp-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .badge-star { background: rgba(255, 214, 10, 0.15); color: #ffd60a; }
+    .badge-blue { background: rgba(10, 132, 255, 0.15); color: #0a84ff; }
+    .badge-purple { background: rgba(191, 90, 242, 0.15); color: #bf5af2; }
+    .badge-green { background: rgba(48, 209, 88, 0.15); color: #30d158; }
+
+    /* Action Bar Footer */
+    .action-footer {
+      margin-top: 36px;
+      padding: 20px 24px;
+      background: rgba(0, 113, 227, 0.08);
+      border: 1px solid rgba(0, 113, 227, 0.25);
+      border-radius: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .tip-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: #34c759;
+      background: rgba(52, 199, 89, 0.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header Navigation -->
+  <header class="hero-header">
+    <div class="header-top">
+      <div class="brand-title">
+        <div class="app-icon-badge">
+          <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zm0 9l2.5-1.25L12 8.5l-2.5 1.25L12 11zm0 2.5l-5-2.5-5 2.5L12 22l10-8.5-5-2.5-5 2.5z"/></svg>
+        </div>
+        <div>
+          <h1>Sub2Viewer 前端美化评估方案</h1>
+        </div>
+        <span>100% 完整功能 · 包含普通用户余额 + 管理员可用账户</span>
+      </div>
+
+      <div class="global-controls">
+        <!-- Scenario Switcher for quick test -->
+        <div class="scenario-bar">
+          <span style="color:var(--text-muted); font-size:11px;">数据场景模拟:</span>
+          <button class="scenario-btn active" onclick="setMockScenario('mixed')">混合模式 (余额 + 42/48)</button>
+          <button class="scenario-btn" onclick="setMockScenario('user')">纯用户模式 (仅余额)</button>
+          <button class="scenario-btn" onclick="setMockScenario('admin')">纯管理模式 (仅42/48)</button>
+        </div>
+
+        <div class="segmented-control" id="viewModeSwitch">
+          <button class="segment-btn active" onclick="switchMainView('showcase')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h7v7H4V4zm9 0h7v7h-7V4zm-9 9h7v7H4v-7zm9 0h7v7h-7v-7z"/></svg>
+            方案演示
+          </button>
+          <button class="segment-btn" onclick="switchMainView('matrix')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h18v18H3V3zm2 4.5h14v-2.5H5V7.5zm0 4.5h14V9.5H5V12zm0 4.5h14v-2.5H5V16.5z"/></svg>
+            横向对比
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scheme Tabs -->
+    <div class="proposal-tabs" id="schemeTabs">
+      <button class="tab-pill active" onclick="switchScheme(1)">
+        <span>方案 1：macOS Sequoia 原生液态磨砂玻璃</span>
+        <span class="tag">推荐 / 系统级原生</span>
+      </button>
+      <button class="tab-pill" onclick="switchScheme(2)">
+        <span>方案 2：VisionOS 空间悬浮水晶 HUD</span>
+        <span class="tag">双环仪表 / 呼吸光晕</span>
+      </button>
+      <button class="tab-pill" onclick="switchScheme(3)">
+        <span>方案 3：iOS 18 模块化控制中心</span>
+        <span class="tag">Bento 卡片 / 便捷触控</span>
+      </button>
+      <button class="tab-pill" onclick="switchScheme(4)">
+        <span>方案 4：Apple Pro Studio 开发者极简黑曜石</span>
+        <span class="tag">高密度 / 纯粹效率</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Content Area -->
+  <main class="content-area">
+
+    <!-- ============================================================== -->
+    <!-- PROPOSAL 1: macOS Sequoia Liquid Glass                        -->
+    <!-- ============================================================== -->
+    <div class="proposal-container active" id="scheme1">
+      <div class="scheme-banner">
+        <div class="scheme-desc">
+          <h2>
+            <span class="comp-badge badge-blue">方案 1</span>
+            macOS Sequoia 原生液态磨砂玻璃风 (Native Liquid Glass)
+          </h2>
+          <p>
+            深度贴合 Apple 官方 Human Interface Guidelines (HIG) 设计标准。利用系统级多层 Vibrancy 模糊材质、0.5px 精细高光微边框与灵动岛弹性伸缩，<strong>同时完整显示普通用户的余额（$28.50）与管理员可用账户（42/48）</strong>。
+          </p>
+          <div class="feature-chips">
+            <span class="feature-chip">✨ Ultra-Thin Material 拟真毛玻璃</span>
+            <span class="feature-chip">🔘 顶部 0.5px 镜面反光光泽 (Specular Edge)</span>
+            <span class="feature-chip">👥 用户余额 + 管理员可用账户并存全展示</span>
+            <span class="feature-chip">⚡️ 灵动岛 (Dynamic Island) 平滑弹性伸缩</span>
+          </div>
+        </div>
+        <div class="palette-box">
+          <div class="palette-title">主色调规范 (Apple Palette)</div>
+          <div class="color-swatches">
+            <div class="swatch" style="background:#0A84FF;" data-name="SystemBlue"></div>
+            <div class="swatch" style="background:#30D158;" data-name="SystemGreen"></div>
+            <div class="swatch" style="background:#AF52DE;" data-name="SystemPurple"></div>
+            <div class="swatch" style="background:#FF9F0A;" data-name="SystemOrange"></div>
+            <div class="swatch" style="background:rgba(255,255,255,0.25);" data-name="VibrantWhite"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="preview-grid">
+        <!-- Column 1: Live HUD Capsule Preview -->
+        <div class="preview-column">
+          <div class="section-headline">
+            <span>HUD 悬浮胶囊实机模拟</span>
+            <span class="tip-pill">可点击或悬浮交互</span>
+          </div>
+          <div class="wallpaper-stage wp-sequoia">
+            <!-- Simulated Menu Bar -->
+            <div class="simulated-menubar">
+              <div class="menubar-left">
+                <span></span>
+                <span>Sub2Viewer</span>
+                <span style="opacity:0.6;">文件</span>
+                <span style="opacity:0.6;">视图</span>
+              </div>
+              <div class="menubar-right">
+                <span>100% ⚡️</span>
+                <span>8月24日 周一 11:30</span>
+              </div>
+            </div>
+
+            <!-- The Scheme 1 HUD Pill Component -->
+            <div class="hud-s1" id="hudPill1" onclick="toggleHudExpand('hudPill1')">
+              <div class="head">
+                <div class="lead">
+                  <div class="status-dot pulse"></div>
+                  <span class="hero-val field-hero-balance">$28.50</span>
+                  <span class="field-hero-sep" style="opacity:0.4; font-size:11px;">·</span>
+                  <span class="hero-accounts field-hero-accounts">42/48 可用</span>
+                </div>
+                <div class="status-badge">正常</div>
+              </div>
+
+              <!-- Expanded Body -->
+              <div class="body-content">
+                <div class="summary-text field-summary">余额 $28.50 · 可用 42/48 · 今日 $1.24</div>
+
+                <div class="usage-grid-s1">
+                  <div class="usage-card-s1">
+                    <div class="label">今日消耗</div>
+                    <div class="val">$1.24</div>
+                  </div>
+                  <div class="usage-card-s1">
+                    <div class="label">本月消耗</div>
+                    <div class="val">$14.80</div>
+                  </div>
+                </div>
+
+                <!-- Complete Multi-Site List -->
+                <div class="site-list-box">
+                  <div class="site-row-item">
+                    <div class="site-info">
+                      <span class="site-type-tag user">用户</span>
+                      <span class="site-name">Claude 3.5 官方节点</span>
+                    </div>
+                    <span class="site-val" style="color:#64D2FF;">$19.30</span>
+                  </div>
+                  <div class="site-row-item">
+                    <div class="site-info">
+                      <span class="site-type-tag user">用户</span>
+                      <span class="site-name">GPT-4o 高速中转站</span>
+                    </div>
+                    <span class="site-val" style="color:#64D2FF;">$9.20</span>
+                  </div>
+                  <div class="site-row-item">
+                    <div class="site-info">
+                      <span class="site-type-tag admin">管理</span>
+                      <span class="site-name">Sub2API 调度集群 (Admin)</span>
+                    </div>
+                    <span class="site-val" style="color:#34c759;">42/48 可用</span>
+                  </div>
+                </div>
+
+                <div class="hud-foot-line">
+                  <span>3 个站点已连接</span>
+                  <span>双击固定 / 正常</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="interactive-tip">
+              点击体验展开 · 包含今日用量与所有多平台状态
+            </div>
+          </div>
+        </div>
+
+        <!-- Column 2: Live macOS Settings Window Preview -->
+        <div class="preview-column">
+          <div class="section-headline">
+            <span>macOS 原生设置与多站点管理看板</span>
+            <span style="font-size:12px; color:var(--text-muted);">Sonoma / Sequoia 侧边栏</span>
+          </div>
+
+          <div class="mac-window-frame">
+            <div class="window-titlebar">
+              <div class="window-traffic-lights">
+                <span class="tl-dot tl-red"></span>
+                <span class="tl-dot tl-yellow"></span>
+                <span class="tl-dot tl-green"></span>
+              </div>
+              <div class="window-title">Sub2Viewer 设置</div>
+            </div>
+
+            <div class="window-layout-split">
+              <!-- Sidebar -->
+              <div class="window-sidebar">
+                <div class="sidebar-item active">
+                  <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>
+                  站点列表 (3)
+                </div>
+                <div class="sidebar-item">
+                  <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+                  阈值与警报
+                </div>
+                <div class="sidebar-item">
+                  <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+                  安全与凭据
+                </div>
+              </div>
+
+              <!-- Main Content -->
+              <div class="window-main-content">
+                <div class="settings-group-card">
+                  <div class="group-card-header">
+                    <span class="group-card-title">监控站点概览 (支持普通用户与管理员模式)</span>
+                    <button class="btn-action" style="padding:4px 10px; font-size:11px;">+ 添加站点</button>
+                  </div>
+                  
+                  <div class="site-list-box">
+                    <div class="site-row-item" style="padding:8px 12px;">
+                      <div>
+                        <div style="font-weight:600; color:#fff; display:flex; align-items:center; gap:6px;">
+                          <span class="site-type-tag user">用户模式</span>
+                          Claude 3.5 官方节点
+                        </div>
+                        <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">https://api.anthropic-proxy.com · API Key 认证</div>
+                      </div>
+                      <div style="text-align:right;">
+                        <div style="font-weight:700; color:#64D2FF;">$19.30</div>
+                        <div style="font-size:10px; color:#34c759;">正常 · 30天有效</div>
+                      </div>
+                    </div>
+
+                    <div class="site-row-item" style="padding:8px 12px;">
+                      <div>
+                        <div style="font-weight:600; color:#fff; display:flex; align-items:center; gap:6px;">
+                          <span class="site-type-tag user">用户模式</span>
+                          GPT-4o 高速中转
+                        </div>
+                        <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">https://sub2.openai-node.cc · API Key 认证</div>
+                      </div>
+                      <div style="text-align:right;">
+                        <div style="font-weight:700; color:#64D2FF;">$9.20</div>
+                        <div style="font-size:10px; color:#34c759;">正常</div>
+                      </div>
+                    </div>
+
+                    <div class="site-row-item" style="padding:8px 12px;">
+                      <div>
+                        <div style="font-weight:600; color:#fff; display:flex; align-items:center; gap:6px;">
+                          <span class="site-type-tag admin">管理员模式</span>
+                          Sub2API 集群总站
+                        </div>
+                        <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">https://admin.sub2api.com · JWT / 2FA 登录</div>
+                      </div>
+                      <div style="text-align:right;">
+                        <div style="font-weight:700; color:#34c759;">42/48 可用</div>
+                        <div style="font-size:10px; color:#34c759;">健康率 87.5%</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="settings-group-card">
+                  <div class="group-card-title" style="margin-bottom:10px;">告警阈值配置</div>
+                  <div class="settings-row">
+                    <div>
+                      <div class="settings-label">用户余额预警阈值 (USD)</div>
+                      <div class="settings-desc">低于该金额时胶囊状态转为黄色预警</div>
+                    </div>
+                    <input class="apple-input-box" type="number" value="5.0" />
+                  </div>
+                  <div class="settings-row">
+                    <div>
+                      <div class="settings-label">管理员可用账号预警阈值</div>
+                      <div class="settings-desc">低于该数量时胶囊状态转为黄色预警</div>
+                    </div>
+                    <input class="apple-input-box" type="number" value="5" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================== -->
+    <!-- PROPOSAL 2: VisionOS Spatial Crystal & Dual Gauge             -->
+    <!-- ============================================================== -->
+    <div class="proposal-container" id="scheme2">
+      <div class="scheme-banner">
+        <div class="scheme-desc">
+          <h2>
+            <span class="comp-badge badge-purple">方案 2</span>
+            VisionOS 空间悬浮水晶风 (Spatial Crystal HUD)
+          </h2>
+          <p>
+            源自 Apple VisionOS 的空间玻璃与微光美学。<strong>在头部与展开体中同时集成「用户总余额」与「管理员可用账号 (42/48)」</strong>，展开后以双环仪表盘 (Activity Rings) 直观对比用户额度充盈度与管理员集群可用率！
+          </p>
+          <div class="feature-chips">
+            <span class="feature-chip">🔮 VisionOS 半透明晶体质感</span>
+            <span class="feature-chip">💫 荧光呼吸光环与双环仪表盘</span>
+            <span class="feature-chip">👥 用户余额 + 42/48 账户并存</span>
+            <span class="feature-chip">🌌 3D 纵深悬浮光影与晶莹卡片</span>
+          </div>
+        </div>
+        <div class="palette-box">
+          <div class="palette-title">主色调规范 (VisionOS Palette)</div>
+          <div class="color-swatches">
+            <div class="swatch" style="background:#8A2BE2;" data-name="PurpleGlow"></div>
+            <div class="swatch" style="background:#00F2FE;" data-name="CyanNeon"></div>
+            <div class="swatch" style="background:#30D158;" data-name="Emerald"></div>
+            <div class="swatch" style="background:#FF375F;" data-name="HotPink"></div>
+            <div class="swatch" style="background:rgba(25,28,48,0.85);" data-name="DarkCrystal"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="preview-grid">
+        <!-- Live HUD Preview -->
+        <div class="preview-column">
+          <div class="section-headline">
+            <span>Vision 空间 HUD 悬浮模拟</span>
+            <span class="tip-pill" style="color:#bf5af2; background:rgba(191,90,242,0.15);">完整双平台数据</span>
+          </div>
+          <div class="wallpaper-stage wp-vision">
+            <div class="simulated-menubar">
+              <div class="menubar-left">
+                <span></span>
+                <span>Sub2Viewer Spatial</span>
+              </div>
+              <div class="menubar-right">
+                <span>8月24日 11:30</span>
+              </div>
+            </div>
+
+            <!-- The Scheme 2 HUD Pill Component -->
+            <div class="hud-s2" id="hudPill2" onclick="toggleHudExpand('hudPill2')">
+              <!-- Scheme 2 Head (Includes BOTH Balance & Accounts!) -->
+              <div class="head">
+                <div class="lead" style="display:flex; align-items:center; gap:6px;">
+                  <div style="width:8px; height:8px; border-radius:50%; background:#00F2FE; box-shadow:0 0 10px #00F2FE; flex-shrink:0;"></div>
+                  <span class="hero-val field-hero-balance" style="color:#00F2FE;">$28.50</span>
+                  <span class="field-hero-sep" style="opacity:0.4; font-size:11px;">·</span>
+                  <span class="hero-accounts field-hero-accounts" style="color:#d8b4fe;">42/48 可用</span>
+                </div>
+                <div class="crystal-pill-badge">HEALTHY</div>
+              </div>
+
+              <!-- Expanded View with Dual Activity Gauges -->
+              <div class="body-content">
+                <!-- Dual Gauge Row -->
+                <div class="dual-gauge-container">
+                  <!-- Gauge 1: User Balance -->
+                  <div class="gauge-card">
+                    <div class="gauge-ring-box">
+                      <svg width="36" height="36" viewBox="0 0 36 36">
+                        <circle cx="18" cy="18" r="14" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3.5"/>
+                        <circle cx="18" cy="18" r="14" fill="none" stroke="#00F2FE" stroke-width="3.5" stroke-dasharray="88" stroke-dashoffset="20" stroke-linecap="round"/>
+                      </svg>
+                      <div class="gauge-ring-label" style="color:#00F2FE;">77%</div>
+                    </div>
+                    <div class="gauge-meta">
+                      <span class="label">用户总余额</span>
+                      <span class="val field-hero-balance">$28.50</span>
+                    </div>
+                  </div>
+
+                  <!-- Gauge 2: Admin Accounts -->
+                  <div class="gauge-card">
+                    <div class="gauge-ring-box">
+                      <svg width="36" height="36" viewBox="0 0 36 36">
+                        <circle cx="18" cy="18" r="14" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3.5"/>
+                        <circle cx="18" cy="18" r="14" fill="none" stroke="#AF52DE" stroke-width="3.5" stroke-dasharray="88" stroke-dashoffset="11" stroke-linecap="round"/>
+                      </svg>
+                      <div class="gauge-ring-label" style="color:#d8b4fe;">88%</div>
+                    </div>
+                    <div class="gauge-meta">
+                      <span class="label">管理可用账号</span>
+                      <span class="val field-hero-accounts">42/48 可用</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Usage Stats -->
+                <div class="usage-grid-s1">
+                  <div class="usage-card-s1" style="background:rgba(0,242,254,0.1); border-color:rgba(0,242,254,0.25);">
+                    <div class="label" style="color:#67e8f9;">今日用量</div>
+                    <div class="val">$1.24</div>
+                  </div>
+                  <div class="usage-card-s1" style="background:rgba(138,43,226,0.15); border-color:rgba(138,43,226,0.3);">
+                    <div class="label" style="color:#d8b4fe;">本月累计</div>
+                    <div class="val">$14.80</div>
+                  </div>
+                </div>
+
+                <!-- Site Breakdown -->
+                <div class="site-list-box">
+                  <div class="site-row-item" style="background:rgba(255,255,255,0.04);">
+                    <div class="site-info">
+                      <span class="site-type-tag user">用户</span>
+                      <span class="site-name">Claude 3.5 镜像站</span>
+                    </div>
+                    <span class="site-val" style="color:#00F2FE;">$19.30</span>
+                  </div>
+                  <div class="site-row-item" style="background:rgba(255,255,255,0.04);">
+                    <div class="site-info">
+                      <span class="site-type-tag admin">管理</span>
+                      <span class="site-name">Sub2API 管理集群</span>
+                    </div>
+                    <span class="site-val" style="color:#34c759;">42/48 正常</span>
+                  </div>
+                </div>
+
+                <div class="hud-foot-line" style="border-color:rgba(255,255,255,0.1);">
+                  <span>Sub2API 空间连接</span>
+                  <span style="color:#00F2FE;">双击固定面板</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="interactive-tip">
+              点击展开 · 包含双环仪表盘与多平台账号监控
+            </div>
+          </div>
+        </div>
+
+        <!-- Vision Settings Mockup -->
+        <div class="preview-column">
+          <div class="section-headline">
+            <span>空间玻璃控制台</span>
+          </div>
+          <div class="mac-window-frame" style="background:linear-gradient(135deg, rgba(20,24,40,0.9), rgba(12,14,24,0.92)); border-color:rgba(138,43,226,0.3);">
+            <div class="window-titlebar" style="border-color:rgba(138,43,226,0.2);">
+              <div class="window-traffic-lights">
+                <span class="tl-dot tl-red"></span>
+                <span class="tl-dot tl-yellow"></span>
+                <span class="tl-dot tl-green"></span>
+              </div>
+              <div class="window-title">节点监控中心 (Spatial)</div>
+            </div>
+            <div class="window-main-content">
+              <div class="settings-group-card" style="background:rgba(138,43,226,0.08); border-color:rgba(138,43,226,0.25);">
+                <div class="group-card-title" style="color:#e9d5ff;">多节点空间网格 (用户 & 管理平台)</div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px;">
+                  <div style="background:rgba(255,255,255,0.04); padding:12px; border-radius:10px; border:1px solid rgba(255,255,255,0.08);">
+                    <div style="font-size:12px; font-weight:600; color:#fff;">用户模式 · Claude</div>
+                    <div style="font-size:16px; font-weight:700; color:#00F2FE; margin-top:4px;">$19.30</div>
+                    <div style="font-size:10px; color:var(--text-muted); margin-top:4px;">可用额度充足</div>
+                  </div>
+                  <div style="background:rgba(255,255,255,0.04); padding:12px; border-radius:10px; border:1px solid rgba(255,255,255,0.08);">
+                    <div style="font-size:12px; font-weight:600; color:#fff;">管理模式 · 集群</div>
+                    <div style="font-size:16px; font-weight:700; color:#d8b4fe; margin-top:4px;">42/48 可用</div>
+                    <div style="font-size:10px; color:#34c759; margin-top:4px;">87.5% 运行良好</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================== -->
+    <!-- PROPOSAL 3: iOS 18 Modular Control Center                     -->
+    <!-- ============================================================== -->
+    <div class="proposal-container" id="scheme3">
+      <div class="scheme-banner">
+        <div class="scheme-desc">
+          <h2>
+            <span class="comp-badge badge-green">方案 3</span>
+            iOS 18 模块化控制中心风 (Bento Control Center)
+          </h2>
+          <p>
+            源自 iOS 18 全新控制中心与智能便签堆叠（Smart Stack）理念。将<strong>用户余额（$28.50）与管理员账号健康度（42/48）</strong>以大圆角独立 Bento 卡片呈现，信息扫描效率极高。
+          </p>
+          <div class="feature-chips">
+            <span class="feature-chip">🍱 Bento Box 模块化微卡片</span>
+            <span class="feature-chip">👥 用户余额 + 管理员可用账户双卡呈现</span>
+            <span class="feature-chip">📱 iOS 18 触控级大圆角与交互反馈</span>
+            <span class="feature-chip">🎯 极简数据层级，一目了然</span>
+          </div>
+        </div>
+        <div class="palette-box">
+          <div class="palette-title">主色调规范 (iOS 18 Bento)</div>
+          <div class="color-swatches">
+            <div class="swatch" style="background:#007AFF;" data-name="iOSBlue"></div>
+            <div class="swatch" style="background:#34C759;" data-name="iOSGreen"></div>
+            <div class="swatch" style="background:#AF52DE;" data-name="iOSPurple"></div>
+            <div class="swatch" style="background:#FF9500;" data-name="iOSOrange"></div>
+            <div class="swatch" style="background:#1C1C1E;" data-name="CardDark"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="preview-grid">
+        <div class="preview-column">
+          <div class="section-headline">
+            <span>iOS 控制中心模块模拟</span>
+            <span class="tip-pill" style="color:#007AFF; background:rgba(0,122,255,0.15);">模块化设计</span>
+          </div>
+          <div class="wallpaper-stage wp-ios">
+            <div class="simulated-menubar">
+              <div class="menubar-left">
+                <span>9:41</span>
+              </div>
+              <div class="menubar-right">
+                <span>5G 📶 100% 🔋</span>
+              </div>
+            </div>
+
+            <!-- Scheme 3 HUD -->
+            <div class="hud-s3" id="hudPill3" onclick="toggleHudExpand('hudPill3')">
+              <div class="head">
+                <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+                  <div class="bento-icon-box">
+                    <svg viewBox="0 0 24 24"><path d="M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2h9zm-9-2h10V8H12v8zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>
+                  </div>
+                  <div style="min-width:0;">
+                    <div style="font-size:9px; color:rgba(255,255,255,0.6); font-weight:600;">SUB2VIEWER</div>
+                    <div style="font-size:13px; font-weight:700; white-space:nowrap;">
+                      <span class="field-hero-balance">$28.50</span>
+                      <span class="field-hero-sep" style="opacity:0.4;">·</span>
+                      <span class="field-hero-accounts" style="color:#d8b4fe;">42/48</span>
+                    </div>
+                  </div>
+                </div>
+                <span class="comp-badge badge-green" style="font-size:10px;">正常</span>
+              </div>
+
+              <!-- Bento Content -->
+              <div class="body-content">
+                <div class="bento-grid">
+                  <div class="bento-tile">
+                    <span class="tile-title">今日消耗</span>
+                    <span class="tile-metric" style="color:#34C759;">$1.24</span>
+                  </div>
+                  <div class="bento-tile">
+                    <span class="tile-title">本月累计</span>
+                    <span class="tile-metric" style="color:#007AFF;">$14.80</span>
+                  </div>
+                </div>
+
+                <!-- Admin Account Health Tile -->
+                <div class="bento-tile" style="height:auto; padding:8px 10px;">
+                  <div style="display:flex; justify-content:space-between; font-size:11px;">
+                    <span style="color:rgba(255,255,255,0.7);">管理账号可用率</span>
+                    <span class="field-hero-accounts" style="font-weight:700; color:#34C759;">42/48 (87.5%)</span>
+                  </div>
+                  <div style="height:6px; background:rgba(255,255,255,0.1); border-radius:3px; margin-top:5px; overflow:hidden;">
+                    <div style="width:87.5%; height:100%; background:#34C759;"></div>
+                  </div>
+                </div>
+
+                <!-- Multi-site Compact Stack -->
+                <div class="site-list-box">
+                  <div class="site-row-item" style="padding:4px 8px;">
+                    <span class="site-name">Claude 3.5 + GPT-4o</span>
+                    <span class="site-val" style="color:#64D2FF;">$28.50</span>
+                  </div>
+                  <div class="site-row-item" style="padding:4px 8px;">
+                    <span class="site-name">Sub2API Admin 总站</span>
+                    <span class="site-val" style="color:#34c759;">42/48 可用</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="interactive-tip">
+              点击展开查看 Bento 控制卡片
+            </div>
+          </div>
+        </div>
+
+        <div class="preview-column">
+          <div class="section-headline">
+            <span>iOS 便签式设置面板</span>
+          </div>
+          <div class="mac-window-frame" style="background:#1c1c1e; border-radius:24px;">
+            <div class="window-titlebar" style="background:rgba(255,255,255,0.02);">
+              <div class="window-title">卡片管理器</div>
+            </div>
+            <div class="window-main-content">
+              <div class="bento-tile" style="height:auto; padding:16px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <div>
+                    <div style="font-size:14px; font-weight:700; color:#fff;">活跃站点 (3)</div>
+                    <div style="font-size:11px; color:var(--text-muted);">自动按用户余额与管理员可用率聚合</div>
+                  </div>
+                  <span class="comp-badge badge-blue">同步中</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================== -->
+    <!-- PROPOSAL 4: Apple Pro Studio / Raycast Minimalist Dark        -->
+    <!-- ============================================================== -->
+    <div class="proposal-container" id="scheme4">
+      <div class="scheme-banner">
+        <div class="scheme-desc">
+          <h2>
+            <span class="comp-badge badge-star">方案 4</span>
+            Apple Pro Studio 开发者极简黑曜石风 (Raycast Pro Inspector)
+          </h2>
+          <p>
+            专为多站点重度开发者打造。采用高对比度暗黑碳素底色搭配 SF Mono 等宽字体，<strong>头部同时紧凑输出 `$28.50 · 42/48`</strong>，展开后以矩阵表格精准列出每个节点的余额、可用率与状态码。
+          </p>
+          <div class="feature-chips">
+            <span class="feature-chip">⌨️ Raycast / Xcode 级高效信息密度</span>
+            <span class="feature-chip">👥 完整多平台矩阵列表 (Data Matrix)</span>
+            <span class="feature-chip">🔤 SF Mono 等宽数字排版</span>
+            <span class="feature-chip">⚡️ 极速渲染与无冗余交互</span>
+          </div>
+        </div>
+        <div class="palette-box">
+          <div class="palette-title">主色调规范 (Pro Dark)</div>
+          <div class="color-swatches">
+            <div class="swatch" style="background:#111215;" data-name="Carbon"></div>
+            <div class="swatch" style="background:#30D158;" data-name="LaserGreen"></div>
+            <div class="swatch" style="background:#FFD60A;" data-name="Amber"></div>
+            <div class="swatch" style="background:#FF453A;" data-name="CoralRed"></div>
+            <div class="swatch" style="background:#64D2FF;" data-name="IceBlue"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="preview-grid">
+        <div class="preview-column">
+          <div class="section-headline">
+            <span>极简 HUD 悬浮模拟</span>
+            <span class="tip-pill" style="color:#ffd60a; background:rgba(255,214,10,0.15);">高密度</span>
+          </div>
+          <div class="wallpaper-stage wp-studio">
+            <div class="simulated-menubar">
+              <div class="menubar-left">
+                <span></span>
+                <span>sub2viewer.sh</span>
+              </div>
+              <div class="menubar-right">
+                <span>PID: 8842</span>
+              </div>
+            </div>
+
+            <!-- Scheme 4 HUD -->
+            <div class="hud-s4" id="hudPill4" onclick="toggleHudExpand('hudPill4')">
+              <div class="head">
+                <div style="display:flex; align-items:center; gap:6px; min-width:0;">
+                  <span style="color:#30d158;">●</span>
+                  <span class="hero-val field-hero-balance" style="font-weight:700; font-size:12px;">$28.50</span>
+                  <span class="field-hero-sep" style="opacity:0.4;">·</span>
+                  <span class="hero-accounts field-hero-accounts" style="font-size:11px; color:#d8b4fe;">42/48</span>
+                </div>
+                <span class="tag-pro">OK</span>
+              </div>
+
+              <!-- Expanded Pro Content -->
+              <div class="body-content">
+                <table class="s4-table">
+                  <tr>
+                    <td style="color:var(--text-muted);">TODAY / MON</td>
+                    <td style="text-align:right; font-weight:600; color:#64d2ff;">$1.24 / $14.80</td>
+                  </tr>
+                  <tr>
+                    <td style="color:var(--text-muted);">[U] CLAUDE-3.5</td>
+                    <td style="text-align:right; color:#30d158;">$19.30</td>
+                  </tr>
+                  <tr>
+                    <td style="color:var(--text-muted);">[U] GPT4O-PROXY</td>
+                    <td style="text-align:right; color:#ffd60a;">$9.20</td>
+                  </tr>
+                  <tr>
+                    <td style="color:var(--text-muted);">[A] ADMIN-POOL</td>
+                    <td class="field-hero-accounts" style="text-align:right; color:#30d158;">42/48 OK</td>
+                  </tr>
+                </table>
+
+                <div class="hud-foot-line" style="font-family:var(--font-mono); font-size:9px; margin-top:4px;">
+                  <span>3 NODES CONNECTED</span>
+                  <span>60s INTERVAL</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="interactive-tip">
+              极简开发者面板 · 点击体验紧凑展开
+            </div>
+          </div>
+        </div>
+
+        <div class="preview-column">
+          <div class="section-headline">
+            <span>Pro 极简数据矩阵与配置</span>
+          </div>
+          <div class="mac-window-frame" style="background:#111215; border-color:rgba(255,255,255,0.15);">
+            <div class="window-titlebar">
+              <div class="window-traffic-lights">
+                <span class="tl-dot tl-red"></span>
+                <span class="tl-dot tl-yellow"></span>
+                <span class="tl-dot tl-green"></span>
+              </div>
+              <div class="window-title" style="font-family:var(--font-mono); font-size:12px;">sub2viewer.config</div>
+            </div>
+            <div class="window-main-content" style="font-family:var(--font-mono);">
+              <div class="settings-group-card" style="background:#16181d; border-color:rgba(255,255,255,0.08);">
+                <div style="font-size:11px; color:#30d158; margin-bottom:8px;">// MONITORED NODES (USER + ADMIN)</div>
+                <div style="font-size:11px; color:rgba(255,255,255,0.8); line-height:1.8;">
+                  [NODE 01] Claude 3.5 Primary -> $19.30 (ACTIVE)<br/>
+                  [NODE 02] GPT-4o Forwarder  -> $9.20  (ACTIVE)<br/>
+                  [NODE 03] Admin Pool Proxy  -> 42/48  (HEALTHY)<br/>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================== -->
+    <!-- COMPARISON MATRIX VIEW                                         -->
+    <!-- ============================================================== -->
+    <div class="comparison-section" id="matrixSection" style="display:none;">
+      <h2 style="font-size:20px; font-weight:600; margin-bottom:6px;">4 大方案核心维度横向评估</h2>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:20px;">
+        所有 4 套方案均已实现 100% 完整功能呈现（普通用户余额 + 管理员可用账户 + 节点列表 + 今日/本月消耗）。
+      </p>
+
+      <table class="comp-table">
+        <thead>
+          <tr>
+            <th style="width:20%;">设计方案</th>
+            <th style="width:20%;">视觉风格定位</th>
+            <th style="width:15%;">macOS / iOS 契合度</th>
+            <th style="width:15%;">多平台兼顾度</th>
+            <th style="width:15%;">动画流畅度</th>
+            <th style="width:15%;">综合推荐指数</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <strong style="color:#0A84FF;">方案 1：macOS Sequoia 原生磨砂</strong><br/>
+              <span style="font-size:11px; color:var(--text-muted);">Native Liquid Glass</span>
+            </td>
+            <td>多层毛玻璃 + 0.5px 微高光 + 灵动岛弹性伸缩</td>
+            <td><span class="comp-badge badge-blue">100% 原生级</span></td>
+            <td><span class="comp-badge badge-green">完全覆盖</span></td>
+            <td><span class="comp-badge badge-purple">弹性平滑</span></td>
+            <td><span class="comp-badge badge-star">🌟 官方强烈推荐</span></td>
+          </tr>
+          <tr>
+            <td>
+              <strong style="color:#bf5af2;">方案 2：VisionOS 空间悬浮水晶</strong><br/>
+              <span style="font-size:11px; color:var(--text-muted);">Spatial Crystal HUD</span>
+            </td>
+            <td>深邃晶体半透 + 呼吸光晕 + <b>双环进度仪表盘</b></td>
+            <td><span class="comp-badge badge-purple">VisionOS 空间</span></td>
+            <td><span class="comp-badge badge-green">双环直观对比</span></td>
+            <td><span class="comp-badge badge-purple">呼吸光效</span></td>
+            <td><span class="comp-badge badge-blue">适合极客酷炫风</span></td>
+          </tr>
+          <tr>
+            <td>
+              <strong style="color:#34c759;">方案 3：iOS 18 模块化控制中心</strong><br/>
+              <span style="font-size:11px; color:var(--text-muted);">Bento Control Center</span>
+            </td>
+            <td>Bento Box 模块卡片 + 大圆角 + 智能堆叠</td>
+            <td><span class="comp-badge badge-green">iOS 18 风格</span></td>
+            <td><span class="comp-badge badge-green">分块大字醒目</span></td>
+            <td><span class="comp-badge badge-blue">微按压反馈</span></td>
+            <td><span class="comp-badge badge-blue">适合触控与简明</span></td>
+          </tr>
+          <tr>
+            <td>
+              <strong style="color:#ffd60a;">方案 4：Apple Pro Studio 极简黑曜石</strong><br/>
+              <span style="font-size:11px; color:var(--text-muted);">Raycast Minimalist Pro</span>
+            </td>
+            <td>暗黑碳素 + SF Mono 等宽字体 + 极高数据密度</td>
+            <td><span class="comp-badge badge-star">开发者专业风</span></td>
+            <td><span class="comp-badge badge-green">紧凑数据矩阵</span></td>
+            <td><span class="comp-badge badge-star">瞬间响应</span></td>
+            <td><span class="comp-badge badge-purple">适合多节点监控</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Summary & Next Steps Footer -->
+    <div class="action-footer">
+      <div>
+        <h4 style="font-size:14px; font-weight:600; color:#fff; margin-bottom:4px;">💡 评估与落地建议</h4>
+        <p>所有 4 套方案均已将 <strong>用户余额（$28.50）</strong> 与 <strong>管理员可用账户数（42/48）</strong> 进行了无缝聚合展示，无任何功能遗漏。</p>
+      </div>
+      <button class="btn-action" onclick="alert('请告诉我你决定采用的方案编号（如方案1或方案2），我将为你直接落地替换代码！')">确认方案并实施代码落地</button>
+    </div>
+
+  </main>
+
+  <script>
+    // Tab Switching for Proposals
+    function switchScheme(index) {
+      const tabs = document.querySelectorAll('#schemeTabs .tab-pill');
+      tabs.forEach((tab, i) => {
+        if (i === index - 1) {
+          tab.classList.add('active');
+        } else {
+          tab.classList.remove('active');
+        }
+      });
+
+      for (let i = 1; i <= 4; i++) {
+        const el = document.getElementById(`scheme${i}`);
+        if (el) {
+          if (i === index) {
+            el.classList.add('active');
+          } else {
+            el.classList.remove('active');
+          }
+        }
+      }
+
+      const matrix = document.getElementById('matrixSection');
+      if (matrix && matrix.style.display !== 'none') {
+        matrix.style.display = 'none';
+        document.querySelectorAll('#viewModeSwitch .segment-btn')[0].classList.add('active');
+        document.querySelectorAll('#viewModeSwitch .segment-btn')[1].classList.remove('active');
+      }
+    }
+
+    // View Mode Switcher (Showcase vs Matrix)
+    function switchMainView(mode) {
+      const btns = document.querySelectorAll('#viewModeSwitch .segment-btn');
+      const matrix = document.getElementById('matrixSection');
+
+      if (mode === 'matrix') {
+        btns[0].classList.remove('active');
+        btns[1].classList.add('active');
+        for (let i = 1; i <= 4; i++) {
+          const el = document.getElementById(`scheme${i}`);
+          if (el) el.classList.remove('active');
+        }
+        if (matrix) matrix.style.display = 'block';
+      } else {
+        btns[0].classList.add('active');
+        btns[1].classList.remove('active');
+        if (matrix) matrix.style.display = 'none';
+        switchScheme(1);
+      }
+    }
+
+    // Interactive HUD expand/collapse toggle
+    function toggleHudExpand(id) {
+      const el = document.getElementById(id);
+      if (el) {
+        el.classList.toggle('expanded');
+      }
+    }
+
+    // Scenario simulation (Mixed, User only, Admin only)
+    function setMockScenario(type) {
+      const btns = document.querySelectorAll('.scenario-bar .scenario-btn');
+      btns.forEach(b => b.classList.remove('active'));
+      if (type === 'mixed') btns[0].classList.add('active');
+      if (type === 'user') btns[1].classList.add('active');
+      if (type === 'admin') btns[2].classList.add('active');
+
+      const balEls = document.querySelectorAll('.field-hero-balance');
+      const accEls = document.querySelectorAll('.field-hero-accounts');
+      const sepEls = document.querySelectorAll('.field-hero-sep');
+      const sumEls = document.querySelectorAll('.field-summary');
+
+      if (type === 'mixed') {
+        balEls.forEach(el => { el.style.display = 'inline'; el.textContent = '$28.50'; });
+        accEls.forEach(el => { el.style.display = 'inline'; el.textContent = '42/48 可用'; });
+        sepEls.forEach(el => { el.style.display = 'inline'; });
+        sumEls.forEach(el => { el.textContent = '余额 $28.50 · 可用 42/48 · 今日 $1.24'; });
+      } else if (type === 'user') {
+        balEls.forEach(el => { el.style.display = 'inline'; el.textContent = '$28.50'; });
+        accEls.forEach(el => { el.style.display = 'none'; });
+        sepEls.forEach(el => { el.style.display = 'none'; });
+        sumEls.forEach(el => { el.textContent = '余额 $28.50 · 今日 $1.24'; });
+      } else if (type === 'admin') {
+        balEls.forEach(el => { el.style.display = 'none'; });
+        accEls.forEach(el => { el.style.display = 'inline'; el.textContent = '42/48 可用'; });
+        sepEls.forEach(el => { el.style.display = 'none'; });
+        sumEls.forEach(el => { el.textContent = '可用账号 42/48 · 健康率 87.5%'; });
+      }
+    }
+  </script>
+</body>
+</html>

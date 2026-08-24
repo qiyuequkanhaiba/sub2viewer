@@ -223,24 +223,26 @@ onUnmounted(() => {
 
 <template>
   <div class="settings">
+    <!-- Header -->
     <header class="head">
       <div class="title-block">
-        <h1>设置</h1>
-        <p>密钥仅保存在本机 · 余额单位 USD</p>
+        <h1>设置与站点管理</h1>
+        <p>密钥仅保存在本机 · 金额统一 USD</p>
       </div>
       <div v-if="message" class="toast ok">{{ message }}</div>
       <div v-if="error" class="toast bad">{{ error }}</div>
     </header>
 
+    <!-- General Threshold Panel -->
     <section class="panel general">
       <div class="panel-head">
-        <h2>监测阈值</h2>
-        <span class="live">修改即时生效</span>
+        <h2>监测告警阈值</h2>
+        <span class="live">即时同步生效</span>
       </div>
 
       <div class="threshold-grid">
         <label class="metric-cell span2">
-          <span class="metric-label">刷新间隔</span>
+          <span class="metric-label">自动刷新间隔</span>
           <span class="metric-field">
             <input
               v-model.number="settingsForm.refreshIntervalSecs"
@@ -253,9 +255,9 @@ onUnmounted(() => {
         </label>
 
         <div class="metric-group">
-          <div class="group-title">余额</div>
+          <div class="group-title">普通用户余额 (USD)</div>
           <label class="metric-cell">
-            <span class="metric-label"><i class="swatch warn" />预警</span>
+            <span class="metric-label"><i class="swatch warn" />预警阈值</span>
             <span class="metric-field">
               <input
                 v-model.number="settingsForm.warnBalanceUsd"
@@ -267,7 +269,7 @@ onUnmounted(() => {
             </span>
           </label>
           <label class="metric-cell">
-            <span class="metric-label"><i class="swatch bad" />告警</span>
+            <span class="metric-label"><i class="swatch bad" />严重告警</span>
             <span class="metric-field">
               <input
                 v-model.number="settingsForm.criticalBalanceUsd"
@@ -281,9 +283,9 @@ onUnmounted(() => {
         </div>
 
         <div class="metric-group">
-          <div class="group-title">健康（可用账号）</div>
+          <div class="group-title">管理员可用账号数</div>
           <label class="metric-cell">
-            <span class="metric-label"><i class="swatch warn" />预警</span>
+            <span class="metric-label"><i class="swatch warn" />预警阈值</span>
             <span class="metric-field">
               <input
                 v-model.number="settingsForm.warnAvailableCount"
@@ -295,7 +297,7 @@ onUnmounted(() => {
             </span>
           </label>
           <label class="metric-cell">
-            <span class="metric-label"><i class="swatch bad" />告警</span>
+            <span class="metric-label"><i class="swatch bad" />严重告警</span>
             <span class="metric-field">
               <input
                 v-model.number="settingsForm.criticalAvailableCount"
@@ -310,10 +312,14 @@ onUnmounted(() => {
       </div>
     </section>
 
+    <!-- Split View for Sites & Editor -->
     <div class="split">
+      <!-- Sites List -->
       <section class="panel sites">
-        <h2>已配置站点</h2>
-        <div v-if="!state?.settings.sites.length" class="blank">还没有站点，请在右侧添加</div>
+        <h2>已配置站点 ({{ state?.settings.sites.length || 0 }})</h2>
+        <div v-if="!state?.settings.sites.length" class="blank">
+          暂无已配置站点，请在右侧表单添加
+        </div>
         <div v-else class="cards">
           <article
             v-for="site in state.settings.sites"
@@ -327,7 +333,7 @@ onUnmounted(() => {
             <div class="info">
               <div class="line1">
                 <strong :title="site.name">{{ site.name }}</strong>
-                <i class="tag" :class="site.role">{{ site.role === "admin" ? "管理员" : "用户" }}</i>
+                <i class="tag" :class="site.role">{{ site.role === "admin" ? "管理员" : "普通用户" }}</i>
                 <i v-if="!site.enabled" class="tag mute">已停用</i>
               </div>
               <div class="line2" :title="site.baseUrl">{{ site.baseUrl }}</div>
@@ -349,44 +355,45 @@ onUnmounted(() => {
         </div>
       </section>
 
+      <!-- Site Editor Form -->
       <section class="panel editor">
-        <h2>{{ editing ? "编辑站点" : "添加站点" }}</h2>
+        <h2>{{ editing ? "编辑站点" : "添加新站点" }}</h2>
 
         <div v-if="twoFa.active" class="twofa">
-          <strong>2FA 验证 — {{ twoFa.emailMasked }}</strong>
+          <strong>2FA 二次验证 — {{ twoFa.emailMasked }}</strong>
           <label class="inline">
-            <span>TOTP</span>
-            <input v-model="twoFa.code" maxlength="6" placeholder="6 位数字" />
-            <button class="btn primary" type="button" @click="submit2fa">提交</button>
+            <span>TOTP 验证码</span>
+            <input v-model="twoFa.code" maxlength="6" placeholder="6 位验证码" />
+            <button class="btn primary" type="button" @click="submit2fa">提交验证</button>
             <button class="btn" type="button" @click="twoFa.active = false">取消</button>
           </label>
         </div>
 
         <div class="grid">
           <label class="field">
-            <span>名称</span>
-            <input v-model="form.name" placeholder="例如 My Sub2" />
+            <span>站点名称</span>
+            <input v-model="form.name" placeholder="例如 Claude 主站 / GPT 聚合" />
           </label>
           <label class="field">
-            <span>角色</span>
+            <span>站点角色</span>
             <select v-model="form.role">
-              <option value="user">普通用户 · API Key</option>
-              <option value="admin">管理员 · 账号密码</option>
+              <option value="user">普通用户 · API Key 模式</option>
+              <option value="admin">管理员 · 账号密码模式</option>
             </select>
           </label>
           <label class="field wide">
-            <span>Base URL</span>
-            <input v-model="form.baseUrl" placeholder="https://sub2.example.com" />
+            <span>Base URL (站点根地址)</span>
+            <input v-model="form.baseUrl" placeholder="https://sub2.example.com (不带 /v1)" />
           </label>
 
           <template v-if="form.role === 'user'">
             <label class="field">
-              <span>API Key{{ editing ? "（留空保留）" : "" }}</span>
+              <span>API Key{{ editing ? "（留空保留原密钥）" : "" }}</span>
               <input v-model="form.apiKey" type="password" placeholder="sk-..." />
             </label>
             <label class="field">
               <span>Key 备注</span>
-              <input v-model="form.apiKeyLabel" placeholder="可选，如 Claude 组" />
+              <input v-model="form.apiKeyLabel" placeholder="可选，如个人主 Key" />
             </label>
           </template>
 
@@ -396,8 +403,8 @@ onUnmounted(() => {
               <input v-model="form.email" type="email" placeholder="admin@example.com" />
             </label>
             <label class="field">
-              <span>密码{{ editing ? "（留空保留）" : "" }}</span>
-              <input v-model="form.password" type="password" />
+              <span>管理员密码{{ editing ? "（留空保留原密码）" : "" }}</span>
+              <input v-model="form.password" type="password" placeholder="密码" />
             </label>
           </template>
         </div>
@@ -405,7 +412,7 @@ onUnmounted(() => {
         <div class="editor-foot">
           <label class="check">
             <input v-model="form.enabled" type="checkbox" />
-            <span>启用监控</span>
+            <span>启用此站点监控</span>
           </label>
           <div class="acts">
             <button class="btn primary" type="button" :disabled="saving" @click="saveSite">
@@ -424,18 +431,21 @@ onUnmounted(() => {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px 22px 20px;
+  gap: 12px;
+  padding: 16px 20px;
   box-sizing: border-box;
   background:
-    radial-gradient(900px 280px at 0% -10%, rgba(91, 140, 255, 0.14), transparent 55%),
+    radial-gradient(1000px 300px at 10% -10%, rgba(10, 132, 255, 0.16), transparent 55%),
+    radial-gradient(900px 300px at 90% 10%, rgba(94, 92, 230, 0.1), transparent 55%),
     var(--bg);
   font-family:
+    "SF Pro Display",
     "SF Pro Text",
     -apple-system,
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
+  color: var(--text);
 }
 
 .head {
@@ -443,60 +453,65 @@ onUnmounted(() => {
   align-items: center;
   gap: 16px;
   flex-shrink: 0;
+  padding-bottom: 2px;
 }
 
 .title-block h1 {
   margin: 0;
   font-size: 18px;
-  font-weight: 650;
+  font-weight: 700;
   letter-spacing: -0.3px;
   white-space: nowrap;
 }
 
 .title-block p {
-  margin: 3px 0 0;
-  font-size: 12px;
+  margin: 2px 0 0;
+  font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
 }
 
 .toast {
   margin-left: auto;
-  padding: 6px 12px;
+  padding: 5px 12px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 46%;
+  max-width: 45%;
 }
 
 .toast.ok {
-  color: var(--ok);
-  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  color: #30d158;
+  background: rgba(48, 209, 88, 0.12);
+  border: 1px solid rgba(48, 209, 88, 0.3);
 }
 
 .toast.bad {
-  color: var(--bad);
-  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  color: #ff453a;
+  background: rgba(255, 69, 58, 0.12);
+  border: 1px solid rgba(255, 69, 58, 0.3);
 }
 
 .panel {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 42%),
-    var(--bg-card);
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: 16px;
-  padding: 16px 18px;
+  background: rgba(25, 29, 40, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 14px;
+  padding: 14px 16px;
   box-shadow:
-    0 10px 28px rgba(0, 0, 0, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    0 12px 30px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
 }
 
 .panel h2 {
-  margin: 0 0 12px;
-  font-size: 12px;
-  font-weight: 600;
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
@@ -511,7 +526,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .panel-head h2 {
@@ -519,16 +534,16 @@ onUnmounted(() => {
 }
 
 .live {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  color: var(--ok);
+  color: #30d158;
   white-space: nowrap;
 }
 
 .threshold-grid {
   display: grid;
-  grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: 160px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
   align-items: stretch;
 }
 
@@ -544,41 +559,42 @@ onUnmounted(() => {
 .metric-group {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  padding: 12px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--bg) 55%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .group-title {
   grid-column: 1 / -1;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: -0.1px;
   white-space: nowrap;
+  color: #d1d1d6;
 }
 
 .metric-cell {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
 .metric-cell.span2 {
   justify-content: center;
-  padding: 12px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--bg) 55%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .metric-label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 5px;
+  font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -586,34 +602,39 @@ onUnmounted(() => {
 .metric-field {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .metric-field input {
-  width: 88px;
+  width: 76px;
   min-width: 0;
   flex: 1;
-  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
-  background: color-mix(in srgb, var(--bg) 80%, transparent);
-  border-radius: 9px;
-  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 7px;
+  padding: 6px 8px;
+  color: #fff;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
   outline: none;
+  transition: all 0.15s ease;
 }
 
 .metric-field input:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.25);
 }
 
 .metric-field em {
   font-style: normal;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
 }
 
 .swatch {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
 }
@@ -623,93 +644,27 @@ onUnmounted(() => {
 }
 
 .swatch.bad {
-  background: #ff3b30;
-}
-
-.inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.inline span {
-  font-size: 13px;
-  color: var(--text);
-  white-space: nowrap;
-}
-
-.inline em {
-  font-style: normal;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.inline input {
-  width: 88px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  border-radius: 8px;
-  padding: 7px 10px;
-  outline: none;
-}
-
-.inline input:focus {
-  border-color: var(--accent);
-}
-
-.inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.inline span {
-  font-size: 13px;
-  color: var(--text);
-  white-space: nowrap;
-}
-
-.inline em {
-  font-style: normal;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.inline input {
-  width: 88px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  border-radius: 8px;
-  padding: 7px 10px;
-  outline: none;
-}
-
-.inline input:focus {
-  border-color: var(--accent);
+  background: #ff453a;
 }
 
 .split {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(520px, 1.35fr) minmax(300px, 0.85fr);
-  gap: 14px;
+  grid-template-columns: minmax(460px, 1.25fr) minmax(320px, 1fr);
+  gap: 12px;
 }
 
 .sites {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .blank {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
   padding: 36px 8px;
   text-align: center;
   white-space: nowrap;
@@ -718,61 +673,57 @@ onUnmounted(() => {
 .cards {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  min-height: 0;
-  overflow: auto;
-  padding-right: 2px;
+  gap: 8px;
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .site-card {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) auto;
-  gap: 12px;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 10px;
   align-items: center;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--bg) 55%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  transition:
-    border-color 0.18s ease,
-    background 0.18s ease,
-    transform 0.18s ease;
+  transition: all 0.16s var(--ease-apple);
 }
 
 .site-card:hover {
-  background: color-mix(in srgb, var(--bg) 30%, var(--bg-card));
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.18);
 }
 
 .site-card.active {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, var(--bg-card));
+  border-color: var(--accent);
+  background: rgba(10, 132, 255, 0.12);
 }
 
 .site-card.off {
-  opacity: 0.72;
+  opacity: 0.65;
 }
 
 .avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   display: grid;
   place-items: center;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
-  letter-spacing: 0;
   color: #fff;
   flex-shrink: 0;
 }
 
 .avatar.user {
-  background: linear-gradient(145deg, #34c759, #1f9d4a);
+  background: linear-gradient(135deg, #0a84ff, #0071e3);
 }
 
 .avatar.admin {
-  background: linear-gradient(145deg, #ff9f0a, #d97706);
+  background: linear-gradient(135deg, #ff9f0a, #d97706);
 }
 
 .info {
@@ -782,12 +733,12 @@ onUnmounted(() => {
 .line1 {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
 .line1 strong {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: -0.2px;
   white-space: nowrap;
@@ -797,43 +748,41 @@ onUnmounted(() => {
 
 .line2,
 .line3 {
-  margin-top: 3px;
-  font-size: 12px;
+  margin-top: 2px;
+  font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.site-card .acts {
-  align-self: center;
-}
-
 .tag {
   display: inline-flex;
   align-items: center;
-  height: 22px;
-  padding: 0 8px;
+  height: 18px;
+  padding: 0 6px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 10px;
   font-style: normal;
   font-weight: 600;
   white-space: nowrap;
 }
 
 .tag.user {
-  color: var(--ok);
-  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  color: #64d2ff;
+  background: rgba(10, 132, 255, 0.16);
+  border: 1px solid rgba(10, 132, 255, 0.35);
 }
 
 .tag.admin {
-  color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: #ff9f0a;
+  background: rgba(255, 159, 10, 0.16);
+  border: 1px solid rgba(255, 159, 10, 0.35);
 }
 
 .tag.mute {
   color: var(--muted);
-  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .acts {
@@ -845,44 +794,42 @@ onUnmounted(() => {
 
 .btn {
   flex: 0 0 auto;
-  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
-  border-radius: 9px;
-  padding: 6px 11px;
-  font-size: 12px;
-  line-height: 1.2;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #fff;
   white-space: nowrap;
-  transition: 0.15s ease;
+  transition: all 0.15s ease;
 }
 
 .btn:hover {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.14);
 }
 
 .btn.primary {
-  background: linear-gradient(135deg, #5b8cff, #7c5cff);
+  background: linear-gradient(135deg, #0a84ff, #5e5ce6);
   border-color: transparent;
   color: #fff;
   font-weight: 600;
-  box-shadow: 0 6px 16px rgba(91, 140, 255, 0.28);
-}
-
-.btn.primary:hover {
-  filter: brightness(1.06);
+  box-shadow: 0 4px 12px rgba(10, 132, 255, 0.3);
 }
 
 .btn.danger {
   color: var(--bad);
-  border-color: color-mix(in srgb, var(--bad) 35%, var(--border));
+  background: rgba(255, 69, 58, 0.1);
+  border-color: rgba(255, 69, 58, 0.3);
 }
 
 .btn.danger:hover {
-  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  background: rgba(255, 69, 58, 0.22);
 }
 
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
 }
 
 .editor {
@@ -892,29 +839,53 @@ onUnmounted(() => {
 }
 
 .twofa {
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 159, 10, 0.1);
+  border: 1px solid rgba(255, 159, 10, 0.35);
 }
 
 .twofa strong {
   display: block;
-  margin-bottom: 8px;
-  font-size: 12px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: #ff9f0a;
+}
+
+.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   white-space: nowrap;
+}
+
+.inline span {
+  font-size: 11px;
+  color: var(--text);
+}
+
+.inline input {
+  width: 80px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: #fff;
+  font-size: 11px;
+  outline: none;
 }
 
 .grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px 14px;
+  gap: 10px 12px;
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -923,7 +894,8 @@ onUnmounted(() => {
 }
 
 .field span {
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 500;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -932,38 +904,45 @@ onUnmounted(() => {
 .field select {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
-  background: color-mix(in srgb, var(--bg) 80%, transparent);
-  border-radius: 10px;
-  padding: 9px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 7px 9px;
+  color: #fff;
+  font-size: 12px;
   outline: none;
-  white-space: nowrap;
+  transition: all 0.15s ease;
 }
 
 .field input:focus,
 .field select:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.25);
 }
 
 .editor-foot {
   margin-top: auto;
-  padding-top: 16px;
+  padding-top: 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
 }
 
 .check {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
 }
 
 .check input {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
+  accent-color: #0a84ff;
+  cursor: pointer;
 }
 </style>
