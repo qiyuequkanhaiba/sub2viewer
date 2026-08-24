@@ -32,7 +32,7 @@ async function syncChrome() {
   const el = pillRef.value;
   if (!el) return;
   const r = el.getBoundingClientRect();
-  const radius = isExpanded.value ? 20 : 19;
+  const radius = isExpanded.value ? 18 : 18;
   try {
     await getCurrentWindow().setSize(
       new LogicalSize(Math.ceil(r.width), Math.ceil(r.height)),
@@ -150,9 +150,10 @@ onUnmounted(() => {
 <style scoped>
 .pill {
   box-sizing: border-box;
-  width: 228px;
-  height: 38px;
-  padding: 0 13px;
+  width: max-content;
+  max-width: 320px;
+  height: 36px;
+  padding: 0 11px;
   margin: 0;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.12)),
@@ -161,8 +162,8 @@ onUnmounted(() => {
   -webkit-backdrop-filter: blur(28px) saturate(200%);
   border: 1px solid rgba(255, 255, 255, 0.35);
   border-top: 1px solid rgba(255, 255, 255, 0.7);
-  border-radius: 19px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  border-radius: 18px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.4);
   color: #ffffff;
   overflow: hidden;
   cursor: grab;
@@ -177,11 +178,11 @@ onUnmounted(() => {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   transition:
-    width 0.32s cubic-bezier(0.16, 1, 0.3, 1),
-    border-radius 0.32s cubic-bezier(0.16, 1, 0.3, 1),
-    background 0.32s cubic-bezier(0.16, 1, 0.3, 1),
-    box-shadow 0.32s cubic-bezier(0.16, 1, 0.3, 1);
-  display: flex;
+    width 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    border-radius 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    background 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-flex;
   flex-direction: column;
 }
 
@@ -214,11 +215,11 @@ onUnmounted(() => {
 
 /* Expanded State: Hugs content automatically without empty space */
 .pill.expanded {
-  width: 300px;
+  width: 290px;
   height: auto;
-  min-height: 38px;
-  border-radius: 20px;
-  padding: 8px 14px 12px;
+  min-height: 36px;
+  border-radius: 18px;
+  padding: 8px 13px 11px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.14)),
     rgba(16, 20, 30, 0.72);
@@ -228,14 +229,15 @@ onUnmounted(() => {
 .head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  height: 38px;
-  flex-shrink: 0;
   gap: 8px;
+  height: 36px;
+  flex-shrink: 0;
 }
 
 .pill.expanded .head {
-  height: 30px;
+  justify-content: space-between;
+  width: 100%;
+  height: 28px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
   padding-bottom: 4px;
 }

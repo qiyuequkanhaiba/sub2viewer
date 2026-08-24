@@ -18,7 +18,7 @@ pub fn apply_clear(app: &tauri::AppHandle) {
     #[cfg(target_os = "macos")]
     if let Ok(ptr) = panel.ns_window() {
         unsafe {
-            clear_nswindow(ptr, 19.0);
+            clear_nswindow(ptr, 18.0);
         }
     }
 }
