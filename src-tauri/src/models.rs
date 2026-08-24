@@ -195,6 +195,10 @@ pub struct UserSnapshot {
     pub subscription: Option<SubscriptionUsage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rpm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub today_cost: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub month_cost: Option<f64>,
     pub updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -225,6 +229,10 @@ pub struct AdminSnapshot {
     pub available_accounts: i64,
     pub error_accounts: i64,
     pub rate_limited_accounts: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub today_cost: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub month_cost: Option<f64>,
     pub updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

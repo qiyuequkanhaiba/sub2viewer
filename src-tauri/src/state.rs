@@ -293,6 +293,8 @@ async fn refresh_one(client: &Sub2Client, site: SiteConfig) -> SiteSnapshot {
                     rate_limits: vec![],
                     subscription: None,
                     rpm: None,
+                    today_cost: None,
+                    month_cost: None,
                     updated_at: Utc::now().to_rfc3339(),
                     error: Some("未配置 API Key".into()),
                 }

@@ -2,7 +2,7 @@ use crate::models::{
     AdminSnapshot, GroupHealth, RateLimitWindow, SubscriptionUsage, UsageSummary, UserSnapshot,
 };
 use crate::store::Store;
-use chrono::Utc;
+use chrono::{Datelike, Local, Utc};
 use serde_json::Value;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -201,7 +201,7 @@ impl Sub2Client {
         api_key: &str,
         site_id: &str,
     ) -> UserSnapshot {
-        let url = Self::join(base_url, "/v1/usage");
+        let url = Self::join(base_url, "/v1/usage?days=31");
         match self
             .http
             .get(&url)
@@ -234,6 +234,8 @@ impl Sub2Client {
                                 rate_limits: vec![],
                                 subscription: None,
                                 rpm: None,
+                                today_cost: None,
+                                month_cost: None,
                                 updated_at: now_iso(),
                                 error: Some(msg.to_string()),
                             };
@@ -324,14 +326,12 @@ impl Sub2Client {
         };
 
         // Prefer realtime availability; fall back to accounts list aggregation.
-        match self.fetch_account_availability(base_url, &token).await {
+        let mut snap = match self.fetch_account_availability(base_url, &token).await {
             Ok(mut snap) => {
                 snap.site_id = site_id.to_string();
                 if snap.error.is_none() && !snap.monitoring_enabled {
-                    // fallback if monitoring disabled
                     match self.fetch_accounts_fallback(base_url, &token).await {
-                        Ok(fb) => {
-                            let mut fb = fb;
+                        Ok(mut fb) => {
                             fb.site_id = site_id.to_string();
                             fb.monitoring_enabled = false;
                             fb
@@ -349,7 +349,6 @@ impl Sub2Client {
                 }
             }
             Err(e) => {
-                // token maybe expired — try refresh once
                 if e.to_string().contains("401") || e.to_string().contains("Unauthorized") {
                     Store::delete_secret(site_id, "access_token");
                     let token = match self
@@ -361,21 +360,73 @@ impl Sub2Client {
                     };
                     if let Ok(mut snap) = self.fetch_account_availability(base_url, &token).await {
                         snap.site_id = site_id.to_string();
+                        self.attach_admin_usage(base_url, &token, &mut snap).await;
                         return snap;
                     }
                     if let Ok(mut snap) = self.fetch_accounts_fallback(base_url, &token).await {
                         snap.site_id = site_id.to_string();
+                        self.attach_admin_usage(base_url, &token, &mut snap).await;
                         return snap;
                     }
                 }
-                // final fallback
                 match self.fetch_accounts_fallback(base_url, &token).await {
                     Ok(mut snap) => {
                         snap.site_id = site_id.to_string();
                         snap
                     }
-                    Err(e2) => error_admin(site_id, format!("{e}; fallback: {e2}")),
+                    Err(e2) => return error_admin(site_id, format!("{e}; fallback: {e2}")),
                 }
+            }
+        };
+        self.attach_admin_usage(base_url, &token, &mut snap).await;
+        snap
+    }
+
+    async fn attach_admin_usage(&self, base_url: &str, token: &str, snap: &mut AdminSnapshot) {
+        for path in [
+            "/api/v1/admin/dashboard/stats",
+            "/api/v1/admin/dashboard/snapshot-v2",
+        ] {
+            let url = Self::join(base_url, path);
+            let Ok(resp) = self
+                .http
+                .get(&url)
+                .header("Authorization", format!("Bearer {token}"))
+                .send()
+                .await
+            else {
+                continue;
+            };
+            if !resp.status().is_success() {
+                continue;
+            }
+            let Ok(body) = resp.json::<Value>().await else {
+                continue;
+            };
+            let data = body.get("data").cloned().unwrap_or(body);
+            if let Some(today) = pick_cost(&data, &["today_cost", "todayCost", "today_spend"])
+                .or_else(|| data.pointer("/today/cost").and_then(|v| v.as_f64()))
+                .or_else(|| data.pointer("/today/actual_cost").and_then(|v| v.as_f64()))
+            {
+                snap.today_cost = Some(today);
+            }
+            if let Some(month) = pick_cost(
+                &data,
+                &[
+                    "month_cost",
+                    "monthCost",
+                    "monthly_cost",
+                    "monthly_usage_usd",
+                    "month_spend",
+                ],
+            )
+            .or_else(|| data.pointer("/month/cost").and_then(|v| v.as_f64()))
+            .or_else(|| data.pointer("/monthly/cost").and_then(|v| v.as_f64()))
+            {
+                snap.month_cost = Some(month);
+            }
+            if snap.today_cost.is_some() || snap.month_cost.is_some() {
+                break;
             }
         }
     }
@@ -502,6 +553,8 @@ impl Sub2Client {
             available_accounts: available,
             error_accounts: errors,
             rate_limited_accounts: rate_limited,
+            today_cost: None,
+            month_cost: None,
             updated_at: now_iso(),
             error: None,
         })
@@ -667,6 +720,8 @@ impl Sub2Client {
             available_accounts: available,
             error_accounts: errors,
             rate_limited_accounts: rate_limited,
+            today_cost: None,
+            month_cost: None,
             updated_at: now_iso(),
             error: None,
         })
@@ -704,6 +759,8 @@ fn error_user(site_id: &str, msg: String) -> UserSnapshot {
         rate_limits: vec![],
         subscription: None,
         rpm: None,
+        today_cost: None,
+        month_cost: None,
         updated_at: now_iso(),
         error: Some(msg),
     }
@@ -719,6 +776,8 @@ fn error_admin(site_id: &str, msg: String) -> AdminSnapshot {
         available_accounts: 0,
         error_accounts: 0,
         rate_limited_accounts: 0,
+        today_cost: None,
+        month_cost: None,
         updated_at: now_iso(),
         error: Some(msg),
     }
@@ -806,6 +865,18 @@ fn parse_usage_body(site_id: &str, body: Value) -> UserSnapshot {
     let today = body.pointer("/usage/today").map(parse_usage_summary);
     let total = body.pointer("/usage/total").map(parse_usage_summary);
     let rpm = body.pointer("/usage/rpm").and_then(|v| v.as_f64());
+    let (series_today, series_month) = sum_daily_usage(&body);
+
+    let today_cost = today
+        .as_ref()
+        .map(|t| if t.actual_cost > 0.0 { t.actual_cost } else { t.cost })
+        .or_else(|| subscription.as_ref().map(|s| s.daily_usage_usd))
+        .or(series_today);
+    let month_cost = subscription
+        .as_ref()
+        .map(|s| s.monthly_usage_usd)
+        .filter(|v| *v > 0.0)
+        .or(series_month);
 
     // quota_limited also may expose quota
     let remaining = remaining.or_else(|| {
@@ -828,9 +899,73 @@ fn parse_usage_body(site_id: &str, body: Value) -> UserSnapshot {
         rate_limits,
         subscription,
         rpm,
+        today_cost,
+        month_cost,
         updated_at: now_iso(),
         error: None,
     }
+}
+
+fn pick_cost(v: &Value, keys: &[&str]) -> Option<f64> {
+    for k in keys {
+        if let Some(n) = v.get(*k).and_then(|x| x.as_f64()) {
+            return Some(n);
+        }
+    }
+    None
+}
+
+fn value_cost(item: &Value) -> f64 {
+    item.get("actual_cost")
+        .and_then(|v| v.as_f64())
+        .or_else(|| item.get("cost").and_then(|v| v.as_f64()))
+        .or_else(|| item.get("total_cost").and_then(|v| v.as_f64()))
+        .or_else(|| item.get("spend").and_then(|v| v.as_f64()))
+        .unwrap_or(0.0)
+}
+
+fn item_date(item: &Value) -> Option<String> {
+    item.get("date")
+        .or_else(|| item.get("day"))
+        .or_else(|| item.get("time"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.chars().take(10).collect())
+}
+
+fn sum_daily_usage(body: &Value) -> (Option<f64>, Option<f64>) {
+    let arr = body
+        .get("daily_usage")
+        .or_else(|| body.get("dailyUsage"))
+        .and_then(|v| v.as_array());
+    let Some(arr) = arr else {
+        return (None, None);
+    };
+    if arr.is_empty() {
+        return (None, None);
+    }
+    let now = Local::now().date_naive();
+    let today = now.format("%Y-%m-%d").to_string();
+    let month_prefix = format!("{:04}-{:02}", now.year(), now.month());
+    let mut today_sum = 0.0;
+    let mut month_sum = 0.0;
+    let mut saw = false;
+    for item in arr {
+        let cost = value_cost(item);
+        let Some(date) = item_date(item) else {
+            continue;
+        };
+        saw = true;
+        if date == today {
+            today_sum += cost;
+        }
+        if date.starts_with(&month_prefix) {
+            month_sum += cost;
+        }
+    }
+    if !saw {
+        return (None, None);
+    }
+    (Some(today_sum), Some(month_sum))
 }
 
 fn parse_usage_summary(v: &Value) -> UsageSummary {

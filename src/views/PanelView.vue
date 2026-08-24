@@ -6,6 +6,7 @@ import type { AppStateView } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 import { getState } from "../api";
 import { mergeMetrics, statusLabel, thresholdsFromSettings } from "../metrics";
+import { formatUsd } from "../utils";
 import { bindWindowDrag } from "../useWindowDrag";
 
 const state = ref<AppStateView | null>(null);
@@ -21,12 +22,6 @@ const m = computed(() =>
     thresholdsFromSettings(state.value?.settings),
   ),
 );
-
-const fill = computed(() => {
-  if (m.value.tone === "bad") return "#ff3b30";
-  if (m.value.tone === "warn") return "#ff9f0a";
-  return "#34c759";
-});
 
 const statusText = computed(() => statusLabel(m.value.tone));
 
@@ -110,8 +105,15 @@ onUnmounted(() => {
     <div class="body">
       <p class="detail">{{ m.detail }}</p>
 
-      <div class="bar">
-        <i :style="{ width: m.remainPct + '%', background: fill }" />
+      <div class="usage">
+        <div class="stat">
+          <span class="k">今日</span>
+          <span class="v">{{ formatUsd(m.todayCost) }}</span>
+        </div>
+        <div class="stat">
+          <span class="k">本月</span>
+          <span class="v">{{ formatUsd(m.monthCost) }}</span>
+        </div>
       </div>
 
       <div v-if="showRows" class="sites">
@@ -186,7 +188,7 @@ onUnmounted(() => {
 .pill:hover,
 .pill.open {
   width: 268px;
-  height: 132px;
+  height: 168px;
   border-radius: 22px;
   padding: 6px 18px 14px;
   background:
@@ -210,7 +212,7 @@ onUnmounted(() => {
 
 .pill.rows:hover,
 .pill.rows.open {
-  height: 168px;
+  height: 204px;
 }
 
 .head {
@@ -330,19 +332,33 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-.bar {
-  height: 5px;
+.usage {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
   margin: 10px 0 8px;
-  border-radius: 99px;
-  background: rgba(0, 0, 0, 0.07);
-  overflow: hidden;
 }
 
-.bar > i {
+.stat {
+  padding: 7px 8px 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.34);
+}
+
+.stat .k {
   display: block;
-  height: 100%;
-  border-radius: 99px;
-  transition: width 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: rgba(29, 29, 31, 0.42);
+}
+
+.stat .v {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.25px;
+  font-variant-numeric: tabular-nums;
 }
 
 .sites {

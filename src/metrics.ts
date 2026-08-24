@@ -111,6 +111,8 @@ export interface MergedMetricView {
   brand: string;
   detail: string;
   remainPct: number;
+  todayCost: number;
+  monthCost: number;
   footerLeft: string;
   footerRight: string;
   error?: string;
@@ -128,6 +130,8 @@ export function mergeMetrics(
       brand: "Sub2",
       detail: "右键菜单栏图标添加站点",
       remainPct: 0,
+      todayCost: 0,
+      monthCost: 0,
       footerLeft: "",
       footerRight: "",
       rows: [],
@@ -142,6 +146,7 @@ export function mergeMetrics(
   let hasBalance = false;
   let unlimited = false;
   let today = 0;
+  let month = 0;
   let avail = 0;
   let totalAcc = 0;
   let hasAdmin = false;
@@ -155,7 +160,11 @@ export function mergeMetrics(
         balance += rem;
         hasBalance = true;
       }
-      today += snap.user.today?.cost ?? snap.user.today?.actualCost ?? 0;
+      today += snap.user.todayCost ?? snap.user.today?.actualCost ?? snap.user.today?.cost ?? 0;
+      month +=
+        snap.user.monthCost ??
+        snap.user.subscription?.monthlyUsageUsd ??
+        0;
       // Only a hard failure (no usable remaining) counts as an error for color.
       if (snap.user.error && snap.user.remaining == null && snap.user.balance == null) {
         errors.push(snap.user.error);
@@ -165,6 +174,8 @@ export function mergeMetrics(
       hasAdmin = true;
       avail += snap.admin.availableAccounts;
       totalAcc += snap.admin.totalAccounts;
+      today += snap.admin.todayCost ?? 0;
+      month += snap.admin.monthCost ?? 0;
       if (snap.admin.error && snap.admin.totalAccounts <= 0) {
         errors.push(snap.admin.error);
       }
@@ -203,6 +214,8 @@ export function mergeMetrics(
     brand: "Sub2",
     detail,
     remainPct,
+    todayCost: today,
+    monthCost: month,
     footerLeft: `${parts.length} 个站点`,
     footerRight: errors.length
       ? `${errors.length} 项异常`

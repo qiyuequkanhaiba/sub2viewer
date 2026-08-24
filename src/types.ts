@@ -52,6 +52,8 @@ export interface UserSnapshot {
   rateLimits: RateLimitWindow[];
   subscription?: SubscriptionUsage | null;
   rpm?: number | null;
+  todayCost?: number | null;
+  monthCost?: number | null;
   updatedAt: string;
   error?: string | null;
 }
@@ -75,6 +77,8 @@ export interface AdminSnapshot {
   availableAccounts: number;
   errorAccounts: number;
   rateLimitedAccounts: number;
+  todayCost?: number | null;
+  monthCost?: number | null;
   updatedAt: string;
   error?: string | null;
 }
