@@ -101,6 +101,9 @@ export interface SiteRow {
   value: string;
   pct: number;
   tone: Tone;
+  todayCost: number;
+  monthCost: number;
+  kind: "user" | "admin";
 }
 
 export interface MergedMetricView {
@@ -113,10 +116,28 @@ export interface MergedMetricView {
   remainPct: number;
   todayCost: number;
   monthCost: number;
+  usageScope: "user" | "admin";
+  hasAdmin: boolean;
   footerLeft: string;
   footerRight: string;
   error?: string;
   rows: SiteRow[];
+}
+
+function siteSpend(snap: SiteSnapshot): { today: number; month: number } {
+  if (snap.user) {
+    return {
+      today: snap.user.todayCost ?? snap.user.today?.actualCost ?? 0,
+      month: snap.user.monthCost ?? 0,
+    };
+  }
+  if (snap.admin) {
+    return {
+      today: snap.admin.todayCost ?? 0,
+      month: snap.admin.monthCost ?? 0,
+    };
+  }
+  return { today: 0, month: 0 };
 }
 
 export function mergeMetrics(
@@ -132,6 +153,8 @@ export function mergeMetrics(
       remainPct: 0,
       todayCost: 0,
       monthCost: 0,
+      usageScope: "user",
+      hasAdmin: false,
       footerLeft: "",
       footerRight: "",
       rows: [],
@@ -145,8 +168,11 @@ export function mergeMetrics(
   let balance = 0;
   let hasBalance = false;
   let unlimited = false;
-  let today = 0;
-  let month = 0;
+  let userToday = 0;
+  let userMonth = 0;
+  let adminToday = 0;
+  let adminMonth = 0;
+  let hasUser = false;
   let avail = 0;
   let totalAcc = 0;
   let hasAdmin = false;
@@ -154,17 +180,15 @@ export function mergeMetrics(
 
   for (const snap of snapshots) {
     if (snap.user) {
+      hasUser = true;
       const rem = snap.user.remaining ?? snap.user.balance;
       if (rem != null && rem < 0) unlimited = true;
       else if (rem != null) {
         balance += rem;
         hasBalance = true;
       }
-      today += snap.user.todayCost ?? snap.user.today?.actualCost ?? snap.user.today?.cost ?? 0;
-      month +=
-        snap.user.monthCost ??
-        snap.user.subscription?.monthlyUsageUsd ??
-        0;
+      userToday += snap.user.todayCost ?? snap.user.today?.actualCost ?? 0;
+      userMonth += snap.user.monthCost ?? 0;
       // Only a hard failure (no usable remaining) counts as an error for color.
       if (snap.user.error && snap.user.remaining == null && snap.user.balance == null) {
         errors.push(snap.user.error);
@@ -174,13 +198,18 @@ export function mergeMetrics(
       hasAdmin = true;
       avail += snap.admin.availableAccounts;
       totalAcc += snap.admin.totalAccounts;
-      today += snap.admin.todayCost ?? 0;
-      month += snap.admin.monthCost ?? 0;
+      adminToday += snap.admin.todayCost ?? 0;
+      adminMonth += snap.admin.monthCost ?? 0;
       if (snap.admin.error && snap.admin.totalAccounts <= 0) {
         errors.push(snap.admin.error);
       }
     }
   }
+
+  // Never mix personal Key spend with another site's platform revenue.
+  const usageScope: "user" | "admin" = hasUser ? "user" : "admin";
+  const today = hasUser ? userToday : adminToday;
+  const month = hasUser ? userMonth : adminMonth;
 
   if (hasBalance && !unlimited) {
     worst = worstTone(worst, toneFromBalance(balance, thresholds));
@@ -216,17 +245,26 @@ export function mergeMetrics(
     remainPct,
     todayCost: today,
     monthCost: month,
+    usageScope,
+    hasAdmin,
     footerLeft: `${parts.length} 个站点`,
     footerRight: errors.length
       ? `${errors.length} 项异常`
       : statusLabel(worst),
     error: errors[0],
-    rows: parts.map((p) => ({
-      name: p.brand || p.title,
-      value: p.hero,
-      pct: p.remainPct,
-      tone: p.tone,
-    })),
+    rows: snapshots.map((snap, i) => {
+      const p = parts[i];
+      const spend = siteSpend(snap);
+      return {
+        name: p.brand || p.title,
+        value: p.hero,
+        pct: p.remainPct,
+        tone: p.tone,
+        todayCost: spend.today,
+        monthCost: spend.month,
+        kind: snap.admin ? "admin" : "user",
+      };
+    }),
   };
 }
 

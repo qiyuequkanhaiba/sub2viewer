@@ -40,7 +40,9 @@ impl AppState {
             refresh_interval_secs: settings.refresh_interval_secs,
             low_balance_threshold: settings.low_balance_threshold,
             warn_balance_usd: settings.warn_balance_usd,
-            critical_balance_usd: settings.critical_balance_usd.max(settings.low_balance_threshold),
+            critical_balance_usd: settings
+                .critical_balance_usd
+                .max(settings.low_balance_threshold),
             warn_health_pct: settings.warn_health_pct,
             critical_health_pct: settings.critical_health_pct,
             warn_available_count: settings.warn_available_count,
@@ -242,9 +244,9 @@ impl AppState {
         let mut handles = Vec::new();
         for site in sites {
             let client = client.clone();
-            handles.push(tokio::spawn(async move {
-                refresh_one(&client, site).await
-            }));
+            handles.push(tokio::spawn(
+                async move { refresh_one(&client, site).await },
+            ));
         }
 
         let mut new_map = HashMap::new();
@@ -257,8 +259,7 @@ impl AppState {
         {
             let mut map = self.snapshots.write().await;
             // remove disabled sites
-            let enabled_ids: std::collections::HashSet<_> =
-                new_map.keys().cloned().collect();
+            let enabled_ids: std::collections::HashSet<_> = new_map.keys().cloned().collect();
             map.retain(|k, _| enabled_ids.contains(k));
             for (k, v) in new_map {
                 map.insert(k, v);

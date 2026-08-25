@@ -6,7 +6,7 @@ import type { AppStateView } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 import { getState } from "../api";
 import { mergeMetrics, statusLabel, thresholdsFromSettings } from "../metrics";
-import { formatUsd } from "../utils";
+import { formatUsdFixed } from "../utils";
 import { bindWindowDrag } from "../useWindowDrag";
 
 const state = ref<AppStateView | null>(null);
@@ -116,12 +116,12 @@ onUnmounted(() => {
 
       <div class="usage">
         <div class="stat">
-          <span class="k">今日消耗</span>
-          <span class="v">{{ formatUsd(m.todayCost) }}</span>
+          <span class="k">{{ m.usageScope === "user" && m.hasAdmin ? "个人今日" : "今日消耗" }}</span>
+          <span class="v">{{ formatUsdFixed(m.todayCost) }}</span>
         </div>
         <div class="stat">
-          <span class="k">本月累计</span>
-          <span class="v">{{ formatUsd(m.monthCost) }}</span>
+          <span class="k">{{ m.usageScope === "user" && m.hasAdmin ? "个人本月" : "本月累计" }}</span>
+          <span class="v">{{ formatUsdFixed(m.monthCost) }}</span>
         </div>
       </div>
 
@@ -134,6 +134,11 @@ onUnmounted(() => {
         >
           <div class="site-info">
             <span class="site-name" :title="row.name">{{ row.name }}</span>
+            <span class="site-usage">
+              {{ row.kind === "admin" ? "平台" : "今日" }}
+              {{ formatUsdFixed(row.todayCost) }}
+              · 本月 {{ formatUsdFixed(row.monthCost) }}
+            </span>
           </div>
           <span class="site-val">{{ row.value }}</span>
         </div>
@@ -418,7 +423,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   font-size: 11px;
-  padding: 4px 8px;
+  padding: 5px 8px;
   border-radius: 7px;
   background: rgba(0, 0, 0, 0.16);
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -426,9 +431,18 @@ onUnmounted(() => {
 
 .site-info {
   display: flex;
-  align-items: center;
-  gap: 5px;
+  flex-direction: column;
+  gap: 1px;
   min-width: 0;
+}
+
+.site-usage {
+  font-size: 10px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .site-name {

@@ -7,6 +7,12 @@ export function formatUsd(value?: number | null, digits = 2): string {
   return `$${value.toFixed(digits)}`;
 }
 
+export function formatUsdFixed(value?: number | null, digits = 2): string {
+  if (value === undefined || value === null || Number.isNaN(value)) return "—";
+  if (value < 0) return "∞";
+  return `$${value.toFixed(digits)}`;
+}
+
 export function formatTime(iso?: string | null): string {
   if (!iso) return "—";
   try {

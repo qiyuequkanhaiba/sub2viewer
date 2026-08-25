@@ -95,9 +95,7 @@ impl Store {
 
     pub fn set_secret(site_id: &str, kind: &str, value: &str) -> Result<(), StoreError> {
         let key = secret_key(site_id, kind);
-        let mut map = secrets_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut map = secrets_lock().lock().unwrap_or_else(|e| e.into_inner());
         if value.is_empty() {
             map.remove(&key);
         } else {
@@ -108,9 +106,7 @@ impl Store {
 
     pub fn get_secret(site_id: &str, kind: &str) -> Option<String> {
         let key = secret_key(site_id, kind);
-        let map = secrets_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let map = secrets_lock().lock().unwrap_or_else(|e| e.into_inner());
         map.get(&key)
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())

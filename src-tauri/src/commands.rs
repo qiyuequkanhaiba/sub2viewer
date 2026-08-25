@@ -1,7 +1,5 @@
 use crate::client::LoginOutcome;
-use crate::models::{
-    AppStateView, LoginResult, SettingsUpdate, SitePublic, SiteUpsert,
-};
+use crate::models::{AppStateView, LoginResult, SettingsUpdate, SitePublic, SiteUpsert};
 use crate::state::AppState;
 use crate::store::Store;
 use std::sync::Arc;

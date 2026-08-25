@@ -2,10 +2,12 @@ use crate::models::{
     AdminSnapshot, GroupHealth, RateLimitWindow, SubscriptionUsage, UsageSummary, UserSnapshot,
 };
 use crate::store::Store;
-use chrono::{Datelike, Local, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
+use reqwest::header::{HeaderMap, HeaderValue, CACHE_CONTROL, PRAGMA};
 use serde_json::Value;
 use std::collections::HashMap;
 use thiserror::Error;
+use url::form_urlencoded;
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -24,9 +26,16 @@ pub struct Sub2Client {
 
 impl Sub2Client {
     pub fn new() -> Self {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CACHE_CONTROL,
+            HeaderValue::from_static("no-cache, no-store, max-age=0"),
+        );
+        headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(20))
             .user_agent(format!("sub2viewer/{}", env!("CARGO_PKG_VERSION")))
+            .default_headers(headers)
             .build()
             .expect("http client");
         Self { http }
@@ -40,6 +49,16 @@ impl Sub2Client {
             format!("/{path}")
         };
         format!("{base}{path}")
+    }
+
+    fn join_query(base: &str, path: &str, pairs: &[(&str, &str)]) -> String {
+        let mut ser = form_urlencoded::Serializer::new(String::new());
+        for (k, v) in pairs {
+            ser.append_pair(k, v);
+        }
+        // Cache-bust GET URLs so reverse proxies cannot freeze usage numbers.
+        ser.append_pair("_ts", &Utc::now().timestamp_millis().to_string());
+        format!("{}?{}", Self::join(base, path), ser.finish())
     }
 
     /// Login with email/password. Returns (access, refresh, role) or 2FA challenge.
@@ -180,7 +199,9 @@ impl Sub2Client {
         let status = resp.status();
         let body: Value = resp.json().await?;
         if !status.is_success() {
-            return Err(ClientError::Message(format!("Token 刷新失败 (HTTP {status})")));
+            return Err(ClientError::Message(format!(
+                "Token 刷新失败 (HTTP {status})"
+            )));
         }
         let data = body.get("data").cloned().unwrap_or(Value::Null);
         let access = data
@@ -201,11 +222,18 @@ impl Sub2Client {
         api_key: &str,
         site_id: &str,
     ) -> UserSnapshot {
-        let url = Self::join(base_url, "/v1/usage?days=31");
+        let tz = local_timezone();
+        let days = usage_lookback_days().to_string();
+        let url = Self::join_query(
+            base_url,
+            "/v1/usage",
+            &[("days", days.as_str()), ("timezone", tz.as_str())],
+        );
         match self
             .http
             .get(&url)
             .header("Authorization", format!("Bearer {api_key}"))
+            .header("Cache-Control", "no-cache")
             .send()
             .await
         {
@@ -337,9 +365,7 @@ impl Sub2Client {
                             fb
                         }
                         Err(e) => {
-                            snap.error = Some(format!(
-                                "实时监控未开启，账号列表回退失败: {e}"
-                            ));
+                            snap.error = Some(format!("实时监控未开启，账号列表回退失败: {e}"));
                             snap.updated_at = now_iso();
                             snap
                         }
@@ -383,52 +409,121 @@ impl Sub2Client {
     }
 
     async fn attach_admin_usage(&self, base_url: &str, token: &str, snap: &mut AdminSnapshot) {
-        for path in [
-            "/api/v1/admin/dashboard/stats",
-            "/api/v1/admin/dashboard/snapshot-v2",
-        ] {
-            let url = Self::join(base_url, path);
-            let Ok(resp) = self
-                .http
-                .get(&url)
-                .header("Authorization", format!("Bearer {token}"))
-                .send()
-                .await
-            else {
-                continue;
-            };
-            if !resp.status().is_success() {
-                continue;
+        let tz = local_timezone();
+        let today = Local::now().date_naive();
+        let month_start = today.with_day(1).unwrap_or(today);
+        let (today_cost, month_cost) = tokio::join!(
+            self.fetch_admin_period_cost(base_url, token, today, today, &tz),
+            self.fetch_admin_period_cost(base_url, token, month_start, today, &tz),
+        );
+        if let Some(v) = today_cost {
+            snap.today_cost = Some(v);
+        }
+        if let Some(v) = month_cost {
+            snap.month_cost = Some(v);
+        }
+        if snap.today_cost.is_some() && snap.month_cost.is_some() {
+            return;
+        }
+        self.attach_admin_usage_legacy(base_url, token, snap).await;
+    }
+
+    async fn fetch_admin_period_cost(
+        &self,
+        base_url: &str,
+        token: &str,
+        start: NaiveDate,
+        end: NaiveDate,
+        tz: &str,
+    ) -> Option<f64> {
+        let start_s = start.format("%Y-%m-%d").to_string();
+        let end_s = end.format("%Y-%m-%d").to_string();
+        let url = Self::join_query(
+            base_url,
+            "/api/v1/admin/usage/stats",
+            &[
+                ("start_date", start_s.as_str()),
+                ("end_date", end_s.as_str()),
+                ("timezone", tz),
+                ("nocache", "true"),
+            ],
+        );
+        let body = self.get_json(&url, token).await?;
+        extract_actual_cost(&unwrap_payload(&body))
+    }
+
+    async fn attach_admin_usage_legacy(
+        &self,
+        base_url: &str,
+        token: &str,
+        snap: &mut AdminSnapshot,
+    ) {
+        if snap.today_cost.is_none() {
+            let url = Self::join_query(base_url, "/api/v1/admin/dashboard/stats", &[]);
+            if let Some(body) = self.get_json(&url, token).await {
+                let data = unwrap_payload(&body);
+                if let Some(today) = extract_today_spend(&data) {
+                    snap.today_cost = Some(today);
+                }
             }
-            let Ok(body) = resp.json::<Value>().await else {
-                continue;
-            };
-            let data = body.get("data").cloned().unwrap_or(body);
-            if let Some(today) = pick_cost(&data, &["today_cost", "todayCost", "today_spend"])
-                .or_else(|| data.pointer("/today/cost").and_then(|v| v.as_f64()))
-                .or_else(|| data.pointer("/today/actual_cost").and_then(|v| v.as_f64()))
+        }
+
+        if snap.today_cost.is_some() && snap.month_cost.is_some() {
+            return;
+        }
+
+        let tz = local_timezone();
+        let today = Local::now().date_naive();
+        let month_start = today.with_day(1).unwrap_or(today);
+        let start_s = month_start.format("%Y-%m-%d").to_string();
+        let end_s = today.format("%Y-%m-%d").to_string();
+        let url = Self::join_query(
+            base_url,
+            "/api/v1/admin/dashboard/snapshot-v2",
+            &[
+                ("start_date", start_s.as_str()),
+                ("end_date", end_s.as_str()),
+                ("timezone", tz.as_str()),
+                ("granularity", "day"),
+                ("include_stats", "true"),
+                ("include_trend", "true"),
+                ("include_model_stats", "false"),
+                ("include_group_stats", "false"),
+            ],
+        );
+        let Some(body) = self.get_json(&url, token).await else {
+            return;
+        };
+        let data = unwrap_payload(&body);
+        if snap.today_cost.is_none() {
+            if let Some(today) = extract_today_spend(&data)
+                .or_else(|| data.get("stats").and_then(extract_today_spend))
             {
                 snap.today_cost = Some(today);
             }
-            if let Some(month) = pick_cost(
-                &data,
-                &[
-                    "month_cost",
-                    "monthCost",
-                    "monthly_cost",
-                    "monthly_usage_usd",
-                    "month_spend",
-                ],
-            )
-            .or_else(|| data.pointer("/month/cost").and_then(|v| v.as_f64()))
-            .or_else(|| data.pointer("/monthly/cost").and_then(|v| v.as_f64()))
-            {
+        }
+        if snap.month_cost.is_none() {
+            let today_s = today.format("%Y-%m-%d").to_string();
+            let month_prefix = format!("{:04}-{:02}", today.year(), today.month());
+            if let Some(month) = sum_daily_usage_on(&data, &today_s, &month_prefix).1 {
                 snap.month_cost = Some(month);
             }
-            if snap.today_cost.is_some() || snap.month_cost.is_some() {
-                break;
-            }
         }
+    }
+
+    async fn get_json(&self, url: &str, bearer: &str) -> Option<Value> {
+        let resp = self
+            .http
+            .get(url)
+            .header("Authorization", format!("Bearer {bearer}"))
+            .header("Cache-Control", "no-cache")
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        resp.json().await.ok()
     }
 
     async fn fetch_account_availability(
@@ -446,9 +541,7 @@ impl Sub2Client {
         let status = resp.status();
         let body: Value = resp.json().await?;
         if status.as_u16() == 401 || status.as_u16() == 403 {
-            return Err(ClientError::Message(format!(
-                "Unauthorized ({status})"
-            )));
+            return Err(ClientError::Message(format!("Unauthorized ({status})")));
         }
         if !status.is_success() {
             let msg = body
@@ -477,7 +570,10 @@ impl Sub2Client {
                         .get("platform")
                         .and_then(|x| x.as_str())
                         .map(|s| s.to_string()),
-                    total: v.get("total_accounts").and_then(|x| x.as_i64()).unwrap_or(0),
+                    total: v
+                        .get("total_accounts")
+                        .and_then(|x| x.as_i64())
+                        .unwrap_or(0),
                     available: v
                         .get("available_count")
                         .and_then(|x| x.as_i64())
@@ -527,14 +623,19 @@ impl Sub2Client {
                 .unwrap_or("unknown")
                 .to_string();
             *status_breakdown.entry(status).or_insert(0) += 1;
-            if v.get("is_available").and_then(|x| x.as_bool()).unwrap_or(false) {
+            if v.get("is_available")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false)
+            {
                 available += 1;
             }
-            if v.get("has_error").and_then(|x| x.as_bool()).unwrap_or(false) {
+            if v.get("has_error")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false)
+            {
                 errors += 1;
             }
-            if v
-                .get("is_rate_limited")
+            if v.get("is_rate_limited")
                 .and_then(|x| x.as_bool())
                 .unwrap_or(false)
             {
@@ -588,11 +689,7 @@ impl Sub2Client {
             .pointer("/data/items")
             .and_then(|v| v.as_array())
             .cloned()
-            .or_else(|| {
-                body.get("data")
-                    .and_then(|d| d.as_array())
-                    .cloned()
-            })
+            .or_else(|| body.get("data").and_then(|d| d.as_array()).cloned())
             .unwrap_or_default();
 
         let mut status_breakdown: HashMap<String, i64> = HashMap::new();
@@ -784,6 +881,7 @@ fn error_admin(site_id: &str, msg: String) -> AdminSnapshot {
 }
 
 fn parse_usage_body(site_id: &str, body: Value) -> UserSnapshot {
+    let body = unwrap_payload(&body);
     let mode = body
         .get("mode")
         .and_then(|v| v.as_str())
@@ -803,14 +901,11 @@ fn parse_usage_body(site_id: &str, body: Value) -> UserSnapshot {
         .get("status")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let balance = body.get("balance").and_then(|v| v.as_f64());
+    let balance = body.get("balance").and_then(json_f64);
     let remaining = body
         .get("remaining")
-        .and_then(|v| v.as_f64())
-        .or_else(|| {
-            body.pointer("/quota/remaining")
-                .and_then(|v| v.as_f64())
-        });
+        .and_then(json_f64)
+        .or_else(|| body.pointer("/quota/remaining").and_then(json_f64));
     let plan_name = body
         .get("planName")
         .or_else(|| body.get("plan_name"))
@@ -826,12 +921,9 @@ fn parse_usage_body(site_id: &str, body: Value) -> UserSnapshot {
                     .and_then(|v| v.as_str())
                     .unwrap_or("?")
                     .to_string(),
-                limit: item.get("limit").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                used: item.get("used").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                remaining: item
-                    .get("remaining")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0),
+                limit: item.get("limit").and_then(json_f64).unwrap_or(0.0),
+                used: item.get("used").and_then(json_f64).unwrap_or(0.0),
+                remaining: item.get("remaining").and_then(json_f64).unwrap_or(0.0),
                 reset_at: item
                     .get("reset_at")
                     .and_then(|v| v.as_str())
@@ -841,21 +933,12 @@ fn parse_usage_body(site_id: &str, body: Value) -> UserSnapshot {
     }
 
     let subscription = body.get("subscription").map(|s| SubscriptionUsage {
-        daily_usage_usd: s
-            .get("daily_usage_usd")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0),
-        weekly_usage_usd: s
-            .get("weekly_usage_usd")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0),
-        monthly_usage_usd: s
-            .get("monthly_usage_usd")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0),
-        daily_limit_usd: s.get("daily_limit_usd").and_then(|v| v.as_f64()),
-        weekly_limit_usd: s.get("weekly_limit_usd").and_then(|v| v.as_f64()),
-        monthly_limit_usd: s.get("monthly_limit_usd").and_then(|v| v.as_f64()),
+        daily_usage_usd: s.get("daily_usage_usd").and_then(json_f64).unwrap_or(0.0),
+        weekly_usage_usd: s.get("weekly_usage_usd").and_then(json_f64).unwrap_or(0.0),
+        monthly_usage_usd: s.get("monthly_usage_usd").and_then(json_f64).unwrap_or(0.0),
+        daily_limit_usd: s.get("daily_limit_usd").and_then(json_f64),
+        weekly_limit_usd: s.get("weekly_limit_usd").and_then(json_f64),
+        monthly_limit_usd: s.get("monthly_limit_usd").and_then(json_f64),
         expires_at: s
             .get("expires_at")
             .and_then(|v| v.as_str())
@@ -864,25 +947,21 @@ fn parse_usage_body(site_id: &str, body: Value) -> UserSnapshot {
 
     let today = body.pointer("/usage/today").map(parse_usage_summary);
     let total = body.pointer("/usage/total").map(parse_usage_summary);
-    let rpm = body.pointer("/usage/rpm").and_then(|v| v.as_f64());
+    let rpm = body.pointer("/usage/rpm").and_then(json_f64);
     let (series_today, series_month) = sum_daily_usage(&body);
+    // /v1/usage usage.today.actual_cost is the same "今日实际扣除" as the
+    // Sub2API Keys / Dashboard cards. daily_usage date buckets can disagree
+    // around timezone midnight, so they are only used for the month rollup.
+    let dash_today = today.as_ref().map(|t| t.actual_cost);
+    let today_cost = dash_today.or(series_today);
+    let month_cost = match (series_month, series_today, today_cost) {
+        (Some(month), Some(series_day), Some(live)) => Some((month - series_day + live).max(0.0)),
+        (Some(month), None, Some(live)) => Some(month + live),
+        (Some(month), _, None) => Some(month),
+        (None, _, live) => live,
+    };
 
-    let today_cost = today
-        .as_ref()
-        .map(|t| if t.actual_cost > 0.0 { t.actual_cost } else { t.cost })
-        .or_else(|| subscription.as_ref().map(|s| s.daily_usage_usd))
-        .or(series_today);
-    let month_cost = subscription
-        .as_ref()
-        .map(|s| s.monthly_usage_usd)
-        .filter(|v| *v > 0.0)
-        .or(series_month);
-
-    // quota_limited also may expose quota
-    let remaining = remaining.or_else(|| {
-        body.pointer("/quota/remaining")
-            .and_then(|v| v.as_f64())
-    });
+    let remaining = remaining.or_else(|| body.pointer("/quota/remaining").and_then(json_f64));
     let balance = balance.or(remaining);
 
     UserSnapshot {
@@ -906,81 +985,375 @@ fn parse_usage_body(site_id: &str, body: Value) -> UserSnapshot {
     }
 }
 
+fn json_f64(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
 fn pick_cost(v: &Value, keys: &[&str]) -> Option<f64> {
     for k in keys {
-        if let Some(n) = v.get(*k).and_then(|x| x.as_f64()) {
-            return Some(n);
+        if let Some(n) = v.get(*k).and_then(json_f64) {
+            if n.is_finite() {
+                return Some(n);
+            }
         }
     }
     None
 }
 
+fn extract_actual_cost(v: &Value) -> Option<f64> {
+    pick_cost(
+        v,
+        &[
+            "total_actual_cost",
+            "totalActualCost",
+            "today_actual_cost",
+            "todayActualCost",
+            "actual_cost",
+            "actualCost",
+        ],
+    )
+    .or_else(|| {
+        pick_cost(
+            v,
+            &["total_cost", "totalCost", "today_cost", "todayCost", "cost"],
+        )
+    })
+}
+
+fn extract_today_spend(v: &Value) -> Option<f64> {
+    pick_cost(
+        v,
+        &[
+            "today_actual_cost",
+            "todayActualCost",
+            "today_cost",
+            "todayCost",
+            "today_spend",
+        ],
+    )
+    .or_else(|| v.pointer("/today/actual_cost").and_then(json_f64))
+    .or_else(|| v.pointer("/today/cost").and_then(json_f64))
+    .or_else(|| v.pointer("/stats/today_actual_cost").and_then(json_f64))
+    .or_else(|| v.pointer("/stats/today_cost").and_then(json_f64))
+}
+
 fn value_cost(item: &Value) -> f64 {
-    item.get("actual_cost")
-        .and_then(|v| v.as_f64())
-        .or_else(|| item.get("cost").and_then(|v| v.as_f64()))
-        .or_else(|| item.get("total_cost").and_then(|v| v.as_f64()))
-        .or_else(|| item.get("spend").and_then(|v| v.as_f64()))
-        .unwrap_or(0.0)
+    pick_cost(
+        item,
+        &[
+            "actual_cost",
+            "actualCost",
+            "cost",
+            "total_actual_cost",
+            "totalActualCost",
+            "total_cost",
+            "totalCost",
+            "spend",
+        ],
+    )
+    .unwrap_or(0.0)
 }
 
 fn item_date(item: &Value) -> Option<String> {
-    item.get("date")
+    let v = item
+        .get("date")
         .or_else(|| item.get("day"))
         .or_else(|| item.get("time"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.chars().take(10).collect())
+        .or_else(|| item.get("bucket_date"))
+        .or_else(|| item.get("bucketDate"))?;
+    if let Some(s) = v.as_str() {
+        let s = s.trim();
+        if s.len() >= 10 && s.as_bytes().get(4) == Some(&b'-') && s.as_bytes().get(7) == Some(&b'-')
+        {
+            return Some(s.chars().take(10).collect());
+        }
+        if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+            return Some(dt.with_timezone(&Local).format("%Y-%m-%d").to_string());
+        }
+    }
+    let n = v
+        .as_i64()
+        .or_else(|| v.as_u64().map(|u| u as i64))
+        .or_else(|| json_f64(v).map(|f| f as i64))?;
+    let secs = if n > 10_000_000_000 { n / 1000 } else { n };
+    DateTime::from_timestamp(secs, 0)
+        .map(|dt| dt.with_timezone(&Local).format("%Y-%m-%d").to_string())
+}
+
+fn daily_usage_items(body: &Value) -> Option<Vec<Value>> {
+    const PATHS: &[&str] = &[
+        "/daily_usage",
+        "/dailyUsage",
+        "/usage/daily_usage",
+        "/usage/daily",
+        "/trend",
+    ];
+    for path in PATHS {
+        let Some(node) = body.pointer(path) else {
+            continue;
+        };
+        if let Some(arr) = node.as_array() {
+            return Some(arr.clone());
+        }
+        if let Some(obj) = node.as_object() {
+            if let Some(arr) = obj
+                .get("items")
+                .or_else(|| obj.get("data"))
+                .or_else(|| obj.get("list"))
+                .and_then(|v| v.as_array())
+            {
+                return Some(arr.clone());
+            }
+        }
+    }
+    None
 }
 
 fn sum_daily_usage(body: &Value) -> (Option<f64>, Option<f64>) {
-    let arr = body
-        .get("daily_usage")
-        .or_else(|| body.get("dailyUsage"))
-        .and_then(|v| v.as_array());
-    let Some(arr) = arr else {
+    let now = Local::now().date_naive();
+    let today = now.format("%Y-%m-%d").to_string();
+    let month_prefix = format!("{:04}-{:02}", now.year(), now.month());
+    sum_daily_usage_on(body, &today, &month_prefix)
+}
+
+fn sum_daily_usage_on(body: &Value, today: &str, month_prefix: &str) -> (Option<f64>, Option<f64>) {
+    let Some(arr) = daily_usage_items(body) else {
         return (None, None);
     };
     if arr.is_empty() {
         return (None, None);
     }
-    let now = Local::now().date_naive();
-    let today = now.format("%Y-%m-%d").to_string();
-    let month_prefix = format!("{:04}-{:02}", now.year(), now.month());
     let mut today_sum = 0.0;
     let mut month_sum = 0.0;
     let mut saw = false;
-    for item in arr {
-        let cost = value_cost(item);
+    let mut saw_today = false;
+    for item in &arr {
         let Some(date) = item_date(item) else {
             continue;
         };
         saw = true;
+        let cost = value_cost(item);
         if date == today {
+            saw_today = true;
             today_sum += cost;
         }
-        if date.starts_with(&month_prefix) {
+        if date.starts_with(month_prefix) {
             month_sum += cost;
         }
     }
     if !saw {
         return (None, None);
     }
-    (Some(today_sum), Some(month_sum))
+    (
+        if saw_today { Some(today_sum) } else { None },
+        Some(month_sum),
+    )
 }
 
 fn parse_usage_summary(v: &Value) -> UsageSummary {
     UsageSummary {
-        requests: v.get("requests").and_then(|x| x.as_i64()).unwrap_or(0),
+        requests: v
+            .get("requests")
+            .and_then(|x| x.as_i64().or_else(|| json_f64(x).map(|n| n as i64)))
+            .unwrap_or(0),
         total_tokens: v
             .get("total_tokens")
-            .and_then(|x| x.as_i64())
+            .or_else(|| v.get("totalTokens"))
+            .and_then(|x| x.as_i64().or_else(|| json_f64(x).map(|n| n as i64)))
             .unwrap_or(0),
-        cost: v.get("cost").and_then(|x| x.as_f64()).unwrap_or(0.0),
+        cost: v.get("cost").and_then(json_f64).unwrap_or(0.0),
         actual_cost: v
             .get("actual_cost")
-            .and_then(|x| x.as_f64())
+            .or_else(|| v.get("actualCost"))
+            .and_then(json_f64)
             .unwrap_or(0.0),
     }
 }
 
+fn unwrap_payload(body: &Value) -> Value {
+    let Some(map) = body.as_object() else {
+        return body.clone();
+    };
+    if !(map.contains_key("code") || map.contains_key("success") || map.contains_key("message")) {
+        return body.clone();
+    }
+    match map.get("data") {
+        Some(data) if !data.is_null() => data.clone(),
+        _ => body.clone(),
+    }
+}
 
+fn usage_lookback_days() -> u32 {
+    Local::now().date_naive().day().max(32).min(90)
+}
+
+fn local_timezone() -> String {
+    if let Ok(tz) = std::env::var("TZ") {
+        let tz = tz.trim().trim_start_matches(':');
+        if !tz.is_empty() && !tz.eq_ignore_ascii_case("localtime") {
+            return tz.to_string();
+        }
+    }
+    if let Some(name) = timezone_from_localtime_link() {
+        return name;
+    }
+    offset_etc_gmt()
+}
+
+fn timezone_from_localtime_link() -> Option<String> {
+    for candidate in ["/etc/localtime", "/var/db/timezone/localtime"] {
+        let Ok(target) = std::fs::read_link(candidate) else {
+            continue;
+        };
+        let s = target.to_string_lossy().replace('\\', "/");
+        for marker in ["zoneinfo/", "TimeZone/"] {
+            if let Some(i) = s.rfind(marker) {
+                let name = s[i + marker.len()..].trim_matches('/');
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn offset_etc_gmt() -> String {
+    let hours = Local::now().offset().local_minus_utc() / 3600;
+    if hours == 0 {
+        "UTC".into()
+    } else {
+        // Etc/GMT uses inverted signs: GMT-8 is UTC+8.
+        format!("Etc/GMT{:+}", -hours)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ymd(days_ago: i64) -> String {
+        (Local::now().date_naive() - chrono::Duration::days(days_ago))
+            .format("%Y-%m-%d")
+            .to_string()
+    }
+
+    #[test]
+    fn live_today_actual_not_replaced_by_series_or_subscription() {
+        let today = ymd(0);
+        let earlier = ymd(3);
+        let body = json!({
+            "mode": "unrestricted",
+            "balance": 12.5,
+            "subscription": {
+                "daily_usage_usd": 99.0,
+                "monthly_usage_usd": 999.0
+            },
+            "usage": {
+                "today": { "requests": 0, "total_tokens": 0, "cost": 1.0, "actual_cost": 0.0 }
+            },
+            "daily_usage": [
+                { "date": earlier, "cost": 2.0, "actual_cost": 1.5 },
+                { "date": today, "cost": 4.0, "actual_cost": 3.25 }
+            ]
+        });
+        let snap = parse_usage_body("s1", body);
+        assert_eq!(snap.today_cost, Some(0.0));
+        assert_eq!(snap.month_cost, Some(1.5));
+    }
+
+    #[test]
+    fn dashboard_today_used_when_series_missing() {
+        let body = json!({
+            "usage": {
+                "today": {
+                    "requests": 4,
+                    "total_tokens": 100,
+                    "cost": 8.0,
+                    "actual_cost": 6.5
+                }
+            }
+        });
+        let snap = parse_usage_body("s1", body);
+        assert_eq!(snap.today_cost, Some(6.5));
+        assert_eq!(snap.month_cost, Some(6.5));
+    }
+
+    #[test]
+    fn daily_usage_items_wrapper_and_actual_cost() {
+        let today = ymd(0);
+        let body = json!({
+            "daily_usage": {
+                "items": [
+                    { "date": today, "cost": "5.00", "actual_cost": "4.20" }
+                ]
+            }
+        });
+        let (today_cost, month_cost) = sum_daily_usage(&body);
+        assert_eq!(today_cost, Some(4.20));
+        assert_eq!(month_cost, Some(4.20));
+    }
+
+    #[test]
+    fn unwraps_admin_envelope_actual_cost() {
+        let body = json!({
+            "code": 0,
+            "message": "ok",
+            "data": { "total_actual_cost": 11.11, "total_cost": 20.0 }
+        });
+        assert_eq!(extract_actual_cost(&unwrap_payload(&body)), Some(11.11));
+    }
+
+    #[test]
+    fn empty_daily_usage_falls_back_to_dashboard_today() {
+        let body = json!({
+            "daily_usage": [],
+            "usage": {
+                "today": { "requests": 2, "total_tokens": 8, "cost": 3.0, "actual_cost": 2.5 }
+            }
+        });
+        let snap = parse_usage_body("s1", body);
+        assert_eq!(snap.today_cost, Some(2.5));
+        assert_eq!(snap.month_cost, Some(2.5));
+    }
+
+    #[test]
+    fn missing_today_row_falls_back_to_dashboard() {
+        let earlier = ymd(2);
+        let body = json!({
+            "usage": {
+                "today": { "requests": 3, "total_tokens": 9, "cost": 7.0, "actual_cost": 6.0 }
+            },
+            "daily_usage": [
+                { "date": earlier, "actual_cost": 1.0 }
+            ]
+        });
+        let snap = parse_usage_body("s1", body);
+        assert_eq!(snap.today_cost, Some(6.0));
+        assert_eq!(snap.month_cost, Some(7.0));
+    }
+
+    #[test]
+    fn month_sum_ignores_previous_month() {
+        let today = Local::now().date_naive();
+        let this_month = today.with_day(1).unwrap().format("%Y-%m-%d").to_string();
+        let prev = (today.with_day(1).unwrap() - chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        let body = json!({
+            "daily_usage": [
+                { "date": prev, "actual_cost": 50.0 },
+                { "date": this_month, "actual_cost": 1.0 }
+            ]
+        });
+        let month_prefix = format!("{:04}-{:02}", today.year(), today.month());
+        let today_s = today.format("%Y-%m-%d").to_string();
+        let (_t, month) = sum_daily_usage_on(&body, &today_s, &month_prefix);
+        assert_eq!(month, Some(1.0));
+    }
+}

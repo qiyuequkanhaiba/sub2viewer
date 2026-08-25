@@ -56,10 +56,9 @@ pub fn run() {
                 ],
             )?;
 
-            let icon = app
-                .default_window_icon()
-                .cloned()
-                .unwrap_or_else(|| Image::from_bytes(include_bytes!("../icons/32x32.png")).expect("icon"));
+            let icon = app.default_window_icon().cloned().unwrap_or_else(|| {
+                Image::from_bytes(include_bytes!("../icons/32x32.png")).expect("icon")
+            });
 
             let _tray = TrayIconBuilder::with_id("main")
                 .icon(icon)
@@ -208,11 +207,11 @@ fn position_near_tray(win: &tauri::WebviewWindow) {
     if let Ok(Some(monitor)) = win.current_monitor() {
         let screen = monitor.size();
         let scale = monitor.scale_factor();
-        let win_size = win.outer_size().unwrap_or(tauri::PhysicalSize::new(480, 300));
+        let win_size = win
+            .outer_size()
+            .unwrap_or(tauri::PhysicalSize::new(480, 300));
         let x = (screen.width as f64 / scale) - (win_size.width as f64 / scale) - 16.0;
         let y = 36.0;
         let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
     }
 }
-
-
