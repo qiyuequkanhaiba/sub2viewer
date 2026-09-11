@@ -593,6 +593,7 @@ impl Sub2Client {
         let mut available = 0i64;
         let mut errors = 0i64;
         let mut rate_limited = 0i64;
+        let mut unschedulable = 0i64;
         let mut status_breakdown: HashMap<String, i64> = HashMap::new();
         let mut seen: HashMap<i64, ()> = HashMap::new();
 
@@ -623,23 +624,11 @@ impl Sub2Client {
                 .unwrap_or("unknown")
                 .to_string();
             *status_breakdown.entry(status).or_insert(0) += 1;
-            if v.get("is_available")
-                .and_then(|x| x.as_bool())
-                .unwrap_or(false)
-            {
-                available += 1;
-            }
-            if v.get("has_error")
-                .and_then(|x| x.as_bool())
-                .unwrap_or(false)
-            {
-                errors += 1;
-            }
-            if v.get("is_rate_limited")
-                .and_then(|x| x.as_bool())
-                .unwrap_or(false)
-            {
-                rate_limited += 1;
+            match classify_ops_account(v) {
+                AccountClass::Available => available += 1,
+                AccountClass::Error => errors += 1,
+                AccountClass::RateLimited => rate_limited += 1,
+                AccountClass::Unschedulable => unschedulable += 1,
             }
         }
 
@@ -654,6 +643,7 @@ impl Sub2Client {
             available_accounts: available,
             error_accounts: errors,
             rate_limited_accounts: rate_limited,
+            unschedulable_accounts: unschedulable,
             today_cost: None,
             month_cost: None,
             updated_at: now_iso(),
@@ -697,6 +687,7 @@ impl Sub2Client {
         let mut available = 0i64;
         let mut errors = 0i64;
         let mut rate_limited = 0i64;
+        let mut unschedulable = 0i64;
 
         for acc in &items {
             let id = acc
@@ -737,12 +728,20 @@ impl Sub2Client {
                 .and_then(|v| v.as_str())
                 .is_some();
 
-            if is_error {
-                errors += 1;
+            let class = if is_error {
+                AccountClass::Error
             } else if is_rate {
-                rate_limited += 1;
+                AccountClass::RateLimited
             } else if is_active && schedulable {
-                available += 1;
+                AccountClass::Available
+            } else {
+                AccountClass::Unschedulable
+            };
+            match class {
+                AccountClass::Available => available += 1,
+                AccountClass::Error => errors += 1,
+                AccountClass::RateLimited => rate_limited += 1,
+                AccountClass::Unschedulable => unschedulable += 1,
             }
 
             // groups can be array or nested
@@ -817,11 +816,42 @@ impl Sub2Client {
             available_accounts: available,
             error_accounts: errors,
             rate_limited_accounts: rate_limited,
+            unschedulable_accounts: unschedulable,
             today_cost: None,
             month_cost: None,
             updated_at: now_iso(),
             error: None,
         })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum AccountClass {
+    Available,
+    Error,
+    RateLimited,
+    Unschedulable,
+}
+
+fn classify_ops_account(v: &Value) -> AccountClass {
+    let has_error = v.get("has_error").and_then(|x| x.as_bool()).unwrap_or(false)
+        || v.get("status").and_then(|x| x.as_str()) == Some("error");
+    let rate_limited = v
+        .get("is_rate_limited")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    let available = v
+        .get("is_available")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    if has_error {
+        AccountClass::Error
+    } else if rate_limited {
+        AccountClass::RateLimited
+    } else if available {
+        AccountClass::Available
+    } else {
+        AccountClass::Unschedulable
     }
 }
 
@@ -873,6 +903,7 @@ fn error_admin(site_id: &str, msg: String) -> AdminSnapshot {
         available_accounts: 0,
         error_accounts: 0,
         rate_limited_accounts: 0,
+        unschedulable_accounts: 0,
         today_cost: None,
         month_cost: None,
         updated_at: now_iso(),
@@ -1355,5 +1386,25 @@ mod tests {
         let today_s = today.format("%Y-%m-%d").to_string();
         let (_t, month) = sum_daily_usage_on(&body, &today_s, &month_prefix);
         assert_eq!(month, Some(1.0));
+    }
+
+    #[test]
+    fn classify_ops_account_partitions_status() {
+        assert_eq!(
+            classify_ops_account(&json!({"is_available": true, "has_error": false, "is_rate_limited": false})),
+            AccountClass::Available
+        );
+        assert_eq!(
+            classify_ops_account(&json!({"is_available": false, "has_error": true, "is_rate_limited": true})),
+            AccountClass::Error
+        );
+        assert_eq!(
+            classify_ops_account(&json!({"is_available": false, "has_error": false, "is_rate_limited": true})),
+            AccountClass::RateLimited
+        );
+        assert_eq!(
+            classify_ops_account(&json!({"is_available": false, "has_error": false, "is_rate_limited": false, "is_overloaded": true})),
+            AccountClass::Unschedulable
+        );
     }
 }

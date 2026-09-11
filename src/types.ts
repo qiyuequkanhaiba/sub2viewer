@@ -77,6 +77,7 @@ export interface AdminSnapshot {
   availableAccounts: number;
   errorAccounts: number;
   rateLimitedAccounts: number;
+  unschedulableAccounts?: number;
   todayCost?: number | null;
   monthCost?: number | null;
   updatedAt: string;

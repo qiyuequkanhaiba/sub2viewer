@@ -350,8 +350,8 @@ async fn update_tray_tooltip(app: &AppHandle, state: &AppState) {
                 problems += 1;
             }
             parts.push(format!(
-                "{}: {}/{} ok",
-                s.site.name, a.available_accounts, a.total_accounts
+                "{}: {}/{}/{}",
+                s.site.name, a.available_accounts, a.error_accounts, a.total_accounts
             ));
         }
     }

@@ -229,6 +229,8 @@ pub struct AdminSnapshot {
     pub available_accounts: i64,
     pub error_accounts: i64,
     pub rate_limited_accounts: i64,
+    #[serde(default)]
+    pub unschedulable_accounts: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub today_cost: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

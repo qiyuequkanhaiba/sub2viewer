@@ -118,6 +118,11 @@ export interface MergedMetricView {
   monthCost: number;
   usageScope: "user" | "admin";
   hasAdmin: boolean;
+  okAccounts: number;
+  errorAccounts: number;
+  rateLimitedAccounts: number;
+  unschedulableAccounts: number;
+  totalAccounts: number;
   footerLeft: string;
   footerRight: string;
   error?: string;
@@ -155,6 +160,11 @@ export function mergeMetrics(
       monthCost: 0,
       usageScope: "user",
       hasAdmin: false,
+      okAccounts: 0,
+      errorAccounts: 0,
+      rateLimitedAccounts: 0,
+      unschedulableAccounts: 0,
+      totalAccounts: 0,
       footerLeft: "",
       footerRight: "",
       rows: [],
@@ -174,6 +184,9 @@ export function mergeMetrics(
   let adminMonth = 0;
   let hasUser = false;
   let avail = 0;
+  let errAcc = 0;
+  let rateAcc = 0;
+  let unschedAcc = 0;
   let totalAcc = 0;
   let hasAdmin = false;
   const errors: string[] = [];
@@ -197,6 +210,9 @@ export function mergeMetrics(
     if (snap.admin) {
       hasAdmin = true;
       avail += snap.admin.availableAccounts;
+      errAcc += snap.admin.errorAccounts;
+      rateAcc += snap.admin.rateLimitedAccounts;
+      unschedAcc += snap.admin.unschedulableAccounts ?? 0;
       totalAcc += snap.admin.totalAccounts;
       adminToday += snap.admin.todayCost ?? 0;
       adminMonth += snap.admin.monthCost ?? 0;
@@ -220,7 +236,11 @@ export function mergeMetrics(
 
   const heroBalance =
     unlimited && !hasBalance ? "∞" : hasBalance ? formatUsd(balance) : undefined;
-  const heroAccounts = hasAdmin ? (totalAcc ? `${avail}/${totalAcc}` : "0") : undefined;
+  const heroAccounts = hasAdmin
+    ? totalAcc
+      ? `${avail}/${errAcc}/${totalAcc}`
+      : "0"
+    : undefined;
   const hero = [heroBalance, heroAccounts].filter(Boolean).join("  ") || "—";
 
   const remainPct = Math.round(
@@ -229,7 +249,9 @@ export function mergeMetrics(
 
   const detailBits: string[] = [];
   if (hasBalance) detailBits.push(`余额 ${formatUsd(balance)}`);
-  if (hasAdmin && totalAcc) detailBits.push(`可用 ${avail}/${totalAcc}`);
+  if (hasAdmin && totalAcc) {
+    detailBits.push(`正常 ${avail} · 错误 ${errAcc} / ${totalAcc}`);
+  }
   if (today > 0) detailBits.push(`今日 ${formatUsd(today)}`);
   const detail =
     errors[0] ||
@@ -247,6 +269,11 @@ export function mergeMetrics(
     monthCost: month,
     usageScope,
     hasAdmin,
+    okAccounts: avail,
+    errorAccounts: errAcc,
+    rateLimitedAccounts: rateAcc,
+    unschedulableAccounts: unschedAcc,
+    totalAccounts: totalAcc,
     footerLeft: `${parts.length} 个站点`,
     footerRight: errors.length
       ? `${errors.length} 项异常`
@@ -387,19 +414,22 @@ function adminMetric(
 
   const total = a.totalAccounts || 0;
   const available = a.availableAccounts;
+  const errors = a.errorAccounts;
   const tone = toneFromAvailable(available, thresholds);
 
   return {
     title,
     subtitle,
-    hero: total ? `${a.availableAccounts}/${total}` : "0",
-    unit: "可用",
+    hero: total ? `${available}/${errors}/${total}` : "0",
+    unit: "账号",
     tone,
     rings: [],
     ticks: [],
     error: undefined,
     brand: title,
-    detail: total ? `可用账号 ${a.availableAccounts} / ${total}` : "暂无账号",
+    detail: total
+      ? `正常 ${available} · 错误 ${errors} / ${total}`
+      : "暂无账号",
     remainPct: total > 0 ? Math.round((available / total) * 100) : 0,
     footerLeft: a.errorAccounts ? `异常 ${a.errorAccounts}` : "运行正常",
     footerRight: statusLabel(tone),

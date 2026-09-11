@@ -75,10 +75,19 @@ onMounted(async () => {
   }
 });
 
-watch([isExpanded, () => m.value.rows.length, () => m.value.hero], async () => {
-  await nextTick();
-  await syncChrome();
-});
+watch(
+  [
+    isExpanded,
+    () => m.value.rows.length,
+    () => m.value.hero,
+    () => m.value.okAccounts,
+    () => m.value.totalAccounts,
+  ],
+  async () => {
+    await nextTick();
+    await syncChrome();
+  },
+);
 
 onUnmounted(() => {
   document.documentElement.classList.remove("panel-mode");
@@ -104,7 +113,11 @@ onUnmounted(() => {
         <div class="dot" :class="{ pulse: m.tone === 'ok' }" />
         <span v-if="m.heroBalance" class="hero money">{{ m.heroBalance }}</span>
         <span v-if="m.heroBalance && m.heroAccounts" class="sep">·</span>
-        <span v-if="m.heroAccounts" class="hero accounts">{{ m.heroAccounts }}</span>
+        <span
+          v-if="m.heroAccounts"
+          class="hero accounts"
+          title="正常 / 错误 / 总量"
+        >{{ m.heroAccounts }}</span>
         <span v-if="!m.heroBalance && !m.heroAccounts" class="hero">{{ m.hero }}</span>
       </div>
       <span class="status-chip">{{ statusText }}</span>
@@ -122,6 +135,25 @@ onUnmounted(() => {
         <div class="stat">
           <span class="k">{{ m.usageScope === "user" && m.hasAdmin ? "个人本月" : "本月累计" }}</span>
           <span class="v">{{ formatUsdFixed(m.monthCost) }}</span>
+        </div>
+      </div>
+
+      <div v-if="m.hasAdmin && m.totalAccounts" class="health">
+        <div class="stat ok">
+          <span class="k">正常</span>
+          <span class="v">{{ m.okAccounts }}</span>
+        </div>
+        <div class="stat bad">
+          <span class="k">错误</span>
+          <span class="v">{{ m.errorAccounts }}</span>
+        </div>
+        <div class="stat warn">
+          <span class="k">限流</span>
+          <span class="v">{{ m.rateLimitedAccounts }}</span>
+        </div>
+        <div class="stat dim">
+          <span class="k">不可调度</span>
+          <span class="v">{{ m.unschedulableAccounts }}</span>
         </div>
       </div>
 
@@ -378,7 +410,8 @@ onUnmounted(() => {
   text-overflow: ellipsis;
 }
 
-.usage {
+.usage,
+.health {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 7px;
@@ -407,6 +440,22 @@ onUnmounted(() => {
   letter-spacing: -0.25px;
   font-variant-numeric: tabular-nums;
   color: #ffffff;
+}
+
+.stat.ok .v {
+  color: #30d158;
+}
+
+.stat.bad .v {
+  color: #ff453a;
+}
+
+.stat.warn .v {
+  color: #ff9f0a;
+}
+
+.stat.dim .v {
+  color: rgba(255, 255, 255, 0.72);
 }
 
 .sites {
