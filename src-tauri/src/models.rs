@@ -256,7 +256,7 @@ pub struct AdminSnapshot {
     pub rate_limited_accounts: i64,
     #[serde(default)]
     pub unschedulable_accounts: i64,
-    /// API keys on this admin site, without secrets.
+    /// The logged-in admin's own API keys, without secrets.
     #[serde(default)]
     pub api_keys: Vec<ApiKeyBinding>,
     /// Active groups that can be selected from the tray.

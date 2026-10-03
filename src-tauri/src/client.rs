@@ -1092,72 +1092,51 @@ impl Sub2Client {
             }
         };
 
-        let mut keys = Vec::new();
-        let mut reported = 0i64;
-        let mut truncated = false;
-        let mut page = 1i64;
-        loop {
-            let page_s = page.to_string();
-            let size_s = KEY_PAGE_SIZE.to_string();
-            let body = match self
-                .admin_get(
-                    base_url,
-                    token,
-                    "/api/v1/admin/users",
-                    &[("page", page_s.as_str()), ("page_size", size_s.as_str())],
-                )
-                .await
-            {
-                Ok(body) => body,
-                Err(e) if is_unauthorized(&e) => return Err(e),
-                Err(e) => {
-                    list_error = Some(format!("用户列表失败: {e}"));
-                    break;
+        // Only the logged-in admin's keys. Other users' keys stay on the website.
+        let owner_id = match self
+            .admin_get(base_url, token, "/api/v1/auth/me", &[])
+            .await
+        {
+            Ok(body) => match parse_self_admin_id(&body) {
+                Some(id) => id,
+                None => {
+                    return Ok(KeyCatalog {
+                        keys: Vec::new(),
+                        groups,
+                        truncated: false,
+                        list_error: Some("无法确认当前管理员".into()),
+                    });
                 }
-            };
-            let (ids, total_users) = parse_id_page(&body);
-            if ids.is_empty() {
-                break;
+            },
+            Err(e) if is_unauthorized(&e) => return Err(e),
+            Err(e) => {
+                return Ok(KeyCatalog {
+                    keys: Vec::new(),
+                    groups,
+                    truncated: false,
+                    list_error: Some(format!("无法确认当前管理员: {e}")),
+                });
             }
-            for user_id in ids {
-                if keys.len() >= MAX_API_KEYS {
-                    truncated = true;
-                    break;
-                }
-                match self
-                    .fetch_user_keys(base_url, token, user_id, MAX_API_KEYS - keys.len())
-                    .await
-                {
-                    Ok((batch, total)) => {
-                        reported += total;
-                        let batch_len = batch.len() as i64;
-                        if batch_len < total {
-                            truncated = true;
-                        }
-                        keys.extend(batch);
-                    }
-                    Err(e) if is_unauthorized(&e) => return Err(e),
-                    Err(e) => {
-                        list_error = Some(format!("密钥列表失败: {e}"));
-                        truncated = true;
-                        break;
-                    }
-                }
+        };
+
+        let (mut keys, truncated) = match self
+            .fetch_user_keys(base_url, token, owner_id, MAX_API_KEYS)
+            .await
+        {
+            Ok((keys, total)) => {
+                let truncated = (keys.len() as i64) < total;
+                (keys, truncated)
             }
-            if truncated || keys.len() >= MAX_API_KEYS {
-                if (page * KEY_PAGE_SIZE) < total_users {
-                    truncated = true;
-                }
-                break;
+            Err(e) if is_unauthorized(&e) => return Err(e),
+            Err(e) => {
+                return Ok(KeyCatalog {
+                    keys: Vec::new(),
+                    groups,
+                    truncated: false,
+                    list_error: Some(format!("密钥列表失败: {e}")),
+                });
             }
-            if page * KEY_PAGE_SIZE >= total_users || page >= 20 {
-                break;
-            }
-            page += 1;
-        }
-        if reported > keys.len() as i64 {
-            truncated = true;
-        }
+        };
         resolve_key_group_names(&mut keys, &groups);
         keys.sort_by(|a, b| {
             a.name
@@ -1196,7 +1175,7 @@ impl Sub2Client {
                     &[("page", page_s.as_str()), ("page_size", size_s.as_str())],
                 )
                 .await?;
-            let (batch, page_total) = parse_api_key_page(&body);
+            let (batch, page_total) = parse_api_key_page_owned(&body, user_id);
             total = page_total.max(total);
             if batch.is_empty() {
                 break;
@@ -1311,23 +1290,52 @@ fn parse_bindable_groups(body: &Value) -> Vec<BindableGroup> {
     raw.into_iter().map(|(_, _, g)| g).collect()
 }
 
-fn parse_id_page(body: &Value) -> (Vec<i64>, i64) {
+/// Id of the logged-in admin. Email, nested keys, and any other profile fields are ignored.
+fn parse_self_admin_id(body: &Value) -> Option<i64> {
+    let data = unwrap_payload(body);
+    let user = data
+        .get("user")
+        .filter(|v| v.get("id").is_some())
+        .unwrap_or(&data);
+    let id = user
+        .get("id")
+        .and_then(|v| v.as_i64())
+        .filter(|id| *id > 0)?;
+    let role = user.get("role").and_then(|v| v.as_str()).unwrap_or("");
+    if !role.eq_ignore_ascii_case("admin") {
+        return None;
+    }
+    Some(id)
+}
+
+fn item_owner_id(v: &Value) -> Option<i64> {
+    v.get("user_id")
+        .and_then(|x| x.as_i64())
+        .or_else(|| v.pointer("/user/id").and_then(|x| x.as_i64()))
+        .filter(|id| *id > 0)
+}
+
+fn parse_api_key_page_owned(body: &Value, owner_id: i64) -> (Vec<ApiKeyBinding>, i64) {
     let data = unwrap_payload(body);
     let items = data
         .get("items")
         .and_then(|v| v.as_array())
         .cloned()
+        .or_else(|| data.as_array().cloned())
         .unwrap_or_default();
     let total = data
         .get("total")
         .and_then(|v| v.as_i64())
         .unwrap_or(items.len() as i64);
-    let ids = items
+    let keys = items
         .iter()
-        .filter_map(|u| u.get("id").and_then(|v| v.as_i64()))
-        .filter(|id| *id > 0)
+        .filter(|v| match item_owner_id(v) {
+            Some(id) => id == owner_id,
+            None => true,
+        })
+        .filter_map(parse_api_key_item)
         .collect();
-    (ids, total)
+    (keys, total)
 }
 
 fn parse_api_key_page(body: &Value) -> (Vec<ApiKeyBinding>, i64) {
@@ -2091,5 +2099,65 @@ mod tests {
         }];
         resolve_key_group_names(&mut keys, &groups);
         assert_eq!(keys[0].group_name.as_deref(), Some("ChatGpt(team号池)"));
+    }
+
+    #[test]
+    fn parse_self_admin_id_keeps_admin_and_drops_profile_secrets() {
+        let body = json!({
+            "code": 0,
+            "message": "success",
+            "data": {
+                "id": 1,
+                "email": "admin@example.com",
+                "role": "admin",
+                "api_keys": [{ "key": "sk-should-not-leak", "name": "hidden" }]
+            }
+        });
+        assert_eq!(parse_self_admin_id(&body), Some(1));
+        assert_eq!(
+            parse_self_admin_id(&json!({"code": 0, "data": {"id": 2, "role": "user"}})),
+            None
+        );
+        assert_eq!(
+            parse_self_admin_id(&json!({"code": 0, "data": {"role": "admin"}})),
+            None
+        );
+    }
+
+    #[test]
+    fn owned_key_page_drops_other_users() {
+        let body = json!({
+            "code": 0,
+            "message": "success",
+            "data": {
+                "items": [
+                    {
+                        "id": 4,
+                        "name": "work",
+                        "user_id": 2,
+                        "group_id": 3,
+                        "status": "active",
+                        "key": "sk-other"
+                    },
+                    {
+                        "id": 7,
+                        "name": "Gpt-free",
+                        "user": { "id": 1, "email": "admin@example.com" },
+                        "group_id": 5,
+                        "status": "active",
+                        "key": "sk-mine"
+                    }
+                ],
+                "total": 2
+            }
+        });
+        let (keys, total) = parse_api_key_page_owned(&body, 1);
+        assert_eq!(total, 2);
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].name, "Gpt-free");
+        let dumped = serde_json::to_string(&keys).unwrap();
+        assert!(!dumped.contains("sk-"));
+        assert!(!dumped.contains("work"));
+        assert!(!dumped.contains("admin@example.com"));
     }
 }
