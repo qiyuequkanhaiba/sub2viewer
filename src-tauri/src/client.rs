@@ -1338,22 +1338,6 @@ fn parse_api_key_page_owned(body: &Value, owner_id: i64) -> (Vec<ApiKeyBinding>,
     (keys, total)
 }
 
-fn parse_api_key_page(body: &Value) -> (Vec<ApiKeyBinding>, i64) {
-    let data = unwrap_payload(body);
-    let items = data
-        .get("items")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .or_else(|| data.as_array().cloned())
-        .unwrap_or_default();
-    let total = data
-        .get("total")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(items.len() as i64);
-    let keys = items.iter().filter_map(parse_api_key_item).collect();
-    (keys, total)
-}
-
 fn parse_api_key_item(v: &Value) -> Option<ApiKeyBinding> {
     let id = v.get("id").and_then(|x| x.as_i64()).filter(|id| *id > 0)?;
     let mut name = v
@@ -2037,7 +2021,7 @@ mod tests {
                 "total": 1
             }
         });
-        let (keys, total) = parse_api_key_page(&body);
+        let (keys, total) = parse_api_key_page_owned(&body, 3);
         assert_eq!(total, 1);
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].name, "Gpt-free");
@@ -2060,7 +2044,7 @@ mod tests {
                 "total": 1
             }
         });
-        let (keys, _) = parse_api_key_page(&body);
+        let (keys, _) = parse_api_key_page_owned(&body, 1);
         assert_eq!(keys[0].name, "密钥 #4");
         assert_eq!(keys[0].group_id, None);
         assert_eq!(keys[0].group_name, None);
