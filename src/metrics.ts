@@ -435,3 +435,66 @@ function adminMetric(
     footerRight: statusLabel(tone),
   };
 }
+
+export interface KeyGroupRow {
+  id: string;
+  site?: string;
+  name: string;
+  group: string;
+  error?: string;
+}
+
+export interface KeyGroupPanel {
+  visible: boolean;
+  notes: string[];
+  rows: KeyGroupRow[];
+  more: number;
+}
+
+const KEY_ROW_LIMIT = 8;
+
+export function keyGroupPanel(snapshots: SiteSnapshot[]): KeyGroupPanel {
+  const contributors = snapshots.filter((s) => {
+    const admin = s.admin;
+    if (s.site.role !== "admin" || !admin) return false;
+    return (admin.apiKeys?.length ?? 0) > 0 || !!admin.keyListError;
+  });
+  if (contributors.length === 0) {
+    return { visible: false, notes: [], rows: [], more: 0 };
+  }
+  const multi = contributors.length > 1;
+  const notes: string[] = [];
+  for (const s of contributors) {
+    const admin = s.admin!;
+    if (admin.keyListError) {
+      notes.push(multi ? `${s.site.name}：${admin.keyListError}` : admin.keyListError);
+    }
+    if (admin.keySwitchSupported === false && (admin.apiKeys?.length ?? 0) > 0) {
+      notes.push(multi ? `${s.site.name} 不能切换分组` : "当前站点不能切换分组");
+    }
+    if (admin.keysTruncated) {
+      notes.push(multi ? `${s.site.name} 仅加载前 200 把密钥` : "仅加载前 200 把密钥");
+    }
+  }
+  const rows: KeyGroupRow[] = [];
+  let more = 0;
+  for (const s of contributors) {
+    const list = s.admin?.apiKeys ?? [];
+    let first = true;
+    for (const key of list) {
+      if (rows.length >= KEY_ROW_LIMIT) {
+        more += 1;
+        continue;
+      }
+      rows.push({
+        id: `${s.site.id}:${key.id}`,
+        site: multi && first ? s.site.name : undefined,
+        name: key.name,
+        group: key.groupName || "未分组",
+        error: key.switchError || undefined,
+      });
+      first = false;
+    }
+  }
+  return { visible: true, notes, rows, more };
+}

@@ -1,12 +1,12 @@
-use crate::client::Sub2Client;
+use crate::client::{KeySwitchError, Sub2Client};
 use crate::models::{
-    AppSettings, AppSettingsPublic, AppStateView, SiteConfig, SitePublic, SiteRole, SiteSnapshot,
-    SiteUpsert,
+    ApiKeyBinding, AppSettings, AppSettingsPublic, AppStateView, BindableGroup, SiteConfig,
+    SitePublic, SiteRole, SiteSnapshot, SiteUpsert,
 };
 use crate::store::Store;
 use chrono::Utc;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -18,6 +18,7 @@ pub struct AppState {
     pub snapshots: RwLock<HashMap<String, SiteSnapshot>>,
     pub last_refresh_at: RwLock<Option<String>>,
     pub refreshing: RwLock<bool>,
+    switching_keys: Mutex<HashSet<String>>,
 }
 
 impl AppState {
@@ -31,6 +32,7 @@ impl AppState {
             snapshots: RwLock::new(HashMap::new()),
             last_refresh_at: RwLock::new(None),
             refreshing: RwLock::new(false),
+            switching_keys: Mutex::new(HashSet::new()),
         })
     }
 
@@ -271,6 +273,187 @@ impl AppState {
         let _ = app.emit("refreshing", false);
         self.emit_state(app).await;
         update_tray_tooltip(app, self).await;
+        let view = self.view().await;
+        crate::tray::apply_tray_menu(app, &view);
+    }
+
+    pub async fn switch_key_group(
+        &self,
+        app: &AppHandle,
+        site_id: String,
+        key_id: i64,
+        group_id: i64,
+    ) {
+        let guard_id = format!("{site_id}|{key_id}");
+        if !self.try_begin_switch(&guard_id) {
+            return;
+        }
+        let changed = self.apply_key_switch(&site_id, key_id, group_id).await;
+        self.end_switch(&guard_id);
+        if changed {
+            self.emit_state(app).await;
+            let view = self.view().await;
+            crate::tray::apply_tray_menu(app, &view);
+        }
+    }
+
+    fn try_begin_switch(&self, id: &str) -> bool {
+        let mut set = self
+            .switching_keys
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if !set.insert(id.to_string()) {
+            return false;
+        }
+        true
+    }
+
+    fn end_switch(&self, id: &str) {
+        self.switching_keys
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(id);
+    }
+
+    async fn apply_key_switch(&self, site_id: &str, key_id: i64, group_id: i64) -> bool {
+        let (base_url, email) = {
+            let settings = self.settings.read().await;
+            let Some(site) = settings.sites.iter().find(|s| s.id == site_id) else {
+                return false;
+            };
+            if site.role != SiteRole::Admin {
+                return false;
+            }
+            (site.base_url.clone(), site.email.clone())
+        };
+        {
+            let map = self.snapshots.read().await;
+            let Some(admin) = map.get(site_id).and_then(|s| s.admin.as_ref()) else {
+                return false;
+            };
+            let groups_missing = admin.bindable_groups.is_empty() && admin.key_list_error.is_some();
+            if !admin.key_switch_supported || groups_missing {
+                return false;
+            }
+            let Some(key) = admin.api_keys.iter().find(|k| k.id == key_id) else {
+                return false;
+            };
+            if key.group_id.unwrap_or(0) == group_id {
+                return false;
+            }
+        }
+
+        match self
+            .client
+            .switch_api_key_group(site_id, &base_url, email.as_deref(), key_id, group_id)
+            .await
+        {
+            Ok(()) => {
+                log::info!("switched api key {key_id} to group {group_id}");
+                match self
+                    .client
+                    .load_key_state(site_id, &base_url, email.as_deref())
+                    .await
+                {
+                    Ok((cat, supported)) => {
+                        self.write_key_catalog(
+                            site_id,
+                            cat.keys,
+                            cat.groups,
+                            cat.truncated,
+                            cat.list_error,
+                            supported,
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        log::warn!("key list refresh after switch failed: {e}");
+                        self.apply_local_group(site_id, key_id, group_id).await;
+                    }
+                }
+                true
+            }
+            Err(KeySwitchError::Unsupported) => {
+                self.client.remember_switch_support(&base_url, false);
+                self.set_key_error(site_id, key_id, "当前站点不能切换分组".into())
+                    .await;
+                self.mark_switch_unsupported(site_id).await;
+                true
+            }
+            Err(KeySwitchError::Unauthorized) => {
+                self.set_key_error(site_id, key_id, "登录已过期，请在设置中重新登录".into())
+                    .await;
+                true
+            }
+            Err(KeySwitchError::Failed(msg)) => {
+                self.set_key_error(site_id, key_id, msg).await;
+                true
+            }
+        }
+    }
+
+    async fn write_key_catalog(
+        &self,
+        site_id: &str,
+        keys: Vec<ApiKeyBinding>,
+        groups: Vec<BindableGroup>,
+        truncated: bool,
+        list_error: Option<String>,
+        supported: bool,
+    ) {
+        let mut map = self.snapshots.write().await;
+        let Some(admin) = map.get_mut(site_id).and_then(|s| s.admin.as_mut()) else {
+            return;
+        };
+        admin.api_keys = keys;
+        admin.bindable_groups = groups;
+        admin.keys_truncated = truncated;
+        admin.key_list_error = list_error;
+        admin.key_switch_supported = supported;
+    }
+
+    async fn set_key_error(&self, site_id: &str, key_id: i64, error: String) {
+        let mut map = self.snapshots.write().await;
+        let Some(admin) = map.get_mut(site_id).and_then(|s| s.admin.as_mut()) else {
+            return;
+        };
+        if let Some(key) = admin.api_keys.iter_mut().find(|k| k.id == key_id) {
+            key.switch_error = Some(error);
+        }
+    }
+
+    /// The write already succeeded. Move the local row when the follow-up list fails.
+    async fn apply_local_group(&self, site_id: &str, key_id: i64, group_id: i64) {
+        let mut map = self.snapshots.write().await;
+        let Some(admin) = map.get_mut(site_id).and_then(|s| s.admin.as_mut()) else {
+            return;
+        };
+        let name = if group_id <= 0 {
+            None
+        } else {
+            admin
+                .bindable_groups
+                .iter()
+                .find(|g| g.id == group_id)
+                .map(|g| g.name.clone())
+        };
+        if let Some(key) = admin.api_keys.iter_mut().find(|k| k.id == key_id) {
+            if group_id <= 0 {
+                key.group_id = None;
+                key.group_name = None;
+            } else {
+                key.group_id = Some(group_id);
+                key.group_name = name.or_else(|| key.group_name.clone());
+            }
+            key.switch_error = None;
+        }
+    }
+
+    async fn mark_switch_unsupported(&self, site_id: &str) {
+        let mut map = self.snapshots.write().await;
+        if let Some(admin) = map.get_mut(site_id).and_then(|s| s.admin.as_mut()) {
+            admin.key_switch_supported = false;
+        }
     }
 }
 

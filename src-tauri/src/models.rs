@@ -217,6 +217,31 @@ pub struct GroupHealth {
     pub error: i64,
 }
 
+/// An API key's current group. The key secret itself is never stored here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiKeyBinding {
+    pub id: i64,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_name: Option<String>,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub switch_error: Option<String>,
+}
+
+/// A group an admin can bind a key to. Account-pool health stays on `GroupHealth`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BindableGroup {
+    pub id: i64,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminSnapshot {
@@ -231,6 +256,20 @@ pub struct AdminSnapshot {
     pub rate_limited_accounts: i64,
     #[serde(default)]
     pub unschedulable_accounts: i64,
+    /// API keys on this admin site, without secrets.
+    #[serde(default)]
+    pub api_keys: Vec<ApiKeyBinding>,
+    /// Active groups that can be selected from the tray.
+    #[serde(default)]
+    pub bindable_groups: Vec<BindableGroup>,
+    /// False when this server has no key-group update route.
+    #[serde(default)]
+    pub key_switch_supported: bool,
+    /// True when the key list was cut at the safety cap.
+    #[serde(default)]
+    pub keys_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_list_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub today_cost: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

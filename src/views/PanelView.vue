@@ -5,7 +5,7 @@ import { LogicalSize, getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppStateView } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 import { getState } from "../api";
-import { mergeMetrics, statusLabel, thresholdsFromSettings } from "../metrics";
+import { keyGroupPanel, mergeMetrics, statusLabel, thresholdsFromSettings } from "../metrics";
 import { formatUsdFixed } from "../utils";
 import { bindWindowDrag } from "../useWindowDrag";
 
@@ -27,6 +27,7 @@ const m = computed(() =>
 const statusText = computed(() => statusLabel(m.value.tone));
 const showRows = computed(() => m.value.rows.length > 0);
 const isExpanded = computed(() => pinned.value || isHovered.value);
+const keys = computed(() => keyGroupPanel(state.value?.snapshots || []));
 
 async function syncChrome() {
   const el = pillRef.value;
@@ -82,6 +83,10 @@ watch(
     () => m.value.hero,
     () => m.value.okAccounts,
     () => m.value.totalAccounts,
+    () => keys.value.rows.length,
+    () => keys.value.notes.length,
+    () => keys.value.more,
+    () => keys.value.rows.map((row) => `${row.group}:${row.error ?? ""}`).join("|"),
   ],
   async () => {
     await nextTick();
@@ -155,6 +160,20 @@ onUnmounted(() => {
           <span class="k">不可调度</span>
           <span class="v">{{ m.unschedulableAccounts }}</span>
         </div>
+      </div>
+
+      <div v-if="keys.visible" class="keys">
+        <div class="keys-title">密钥分组</div>
+        <p v-for="note in keys.notes" :key="note" class="key-note">{{ note }}</p>
+        <template v-for="row in keys.rows" :key="row.id">
+          <div v-if="row.site" class="key-site">{{ row.site }}</div>
+          <div class="key-row">
+            <span class="key-name" :title="row.name">{{ row.name }}</span>
+            <span class="key-group" :title="row.group">{{ row.group }}</span>
+          </div>
+          <p v-if="row.error" class="key-err">{{ row.error }}</p>
+        </template>
+        <p v-if="keys.more" class="key-note">其余 {{ keys.more }} 个</p>
       </div>
 
       <div v-if="showRows" class="sites">
@@ -456,6 +475,64 @@ onUnmounted(() => {
 
 .stat.dim .v {
   color: rgba(255, 255, 255, 0.72);
+}
+
+.keys {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.keys-title,
+.key-site,
+.key-note {
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.key-note,
+.key-err {
+  margin: 0;
+  line-height: 1.3;
+}
+
+.key-err {
+  font-size: 10px;
+  color: #ff453a;
+}
+
+.key-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.key-name,
+.key-group {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.key-name {
+  color: rgba(255, 255, 255, 0.88);
+  font-weight: 500;
+  min-width: 0;
+}
+
+.key-group {
+  color: #64d2ff;
+  font-weight: 650;
+  flex-shrink: 0;
+  max-width: 58%;
 }
 
 .sites {

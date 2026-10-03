@@ -1,13 +1,19 @@
 use crate::models::{
-    AdminSnapshot, GroupHealth, RateLimitWindow, SubscriptionUsage, UsageSummary, UserSnapshot,
+    AdminSnapshot, ApiKeyBinding, BindableGroup, GroupHealth, RateLimitWindow, SubscriptionUsage,
+    UsageSummary, UserSnapshot,
 };
 use crate::store::Store;
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use reqwest::header::{HeaderMap, HeaderValue, CACHE_CONTROL, PRAGMA};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use url::form_urlencoded;
+
+const KEY_PAGE_SIZE: i64 = 100;
+const MAX_API_KEYS: usize = 200;
+const MAX_BINDABLE_GROUPS: usize = 50;
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -22,6 +28,23 @@ pub enum ClientError {
 #[derive(Clone)]
 pub struct Sub2Client {
     http: reqwest::Client,
+    /// base url -> whether PUT /admin/api-keys/:id exists. Probed once per process.
+    switch_support: Arc<Mutex<HashMap<String, bool>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyCatalog {
+    pub keys: Vec<ApiKeyBinding>,
+    pub groups: Vec<BindableGroup>,
+    pub truncated: bool,
+    pub list_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeySwitchError {
+    Failed(String),
+    Unauthorized,
+    Unsupported,
 }
 
 impl Sub2Client {
@@ -38,7 +61,10 @@ impl Sub2Client {
             .default_headers(headers)
             .build()
             .expect("http client");
-        Self { http }
+        Self {
+            http,
+            switch_support: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     fn join(base: &str, path: &str) -> String {
@@ -354,7 +380,7 @@ impl Sub2Client {
         };
 
         // Prefer realtime availability; fall back to accounts list aggregation.
-        let mut snap = match self.fetch_account_availability(base_url, &token).await {
+        let snap = match self.fetch_account_availability(base_url, &token).await {
             Ok(mut snap) => {
                 snap.site_id = site_id.to_string();
                 if snap.error.is_none() && !snap.monitoring_enabled {
@@ -386,13 +412,15 @@ impl Sub2Client {
                     };
                     if let Ok(mut snap) = self.fetch_account_availability(base_url, &token).await {
                         snap.site_id = site_id.to_string();
-                        self.attach_admin_usage(base_url, &token, &mut snap).await;
-                        return snap;
+                        return self
+                            .finish_admin(site_id, base_url, email, &token, snap)
+                            .await;
                     }
                     if let Ok(mut snap) = self.fetch_accounts_fallback(base_url, &token).await {
                         snap.site_id = site_id.to_string();
-                        self.attach_admin_usage(base_url, &token, &mut snap).await;
-                        return snap;
+                        return self
+                            .finish_admin(site_id, base_url, email, &token, snap)
+                            .await;
                     }
                 }
                 match self.fetch_accounts_fallback(base_url, &token).await {
@@ -404,7 +432,21 @@ impl Sub2Client {
                 }
             }
         };
-        self.attach_admin_usage(base_url, &token, &mut snap).await;
+        self.finish_admin(site_id, base_url, email, &token, snap)
+            .await
+    }
+
+    async fn finish_admin(
+        &self,
+        site_id: &str,
+        base_url: &str,
+        email: Option<&str>,
+        token: &str,
+        mut snap: AdminSnapshot,
+    ) -> AdminSnapshot {
+        self.attach_admin_usage(base_url, token, &mut snap).await;
+        self.attach_key_catalog(site_id, base_url, email, token, &mut snap)
+            .await;
         snap
     }
 
@@ -644,6 +686,11 @@ impl Sub2Client {
             error_accounts: errors,
             rate_limited_accounts: rate_limited,
             unschedulable_accounts: unschedulable,
+            api_keys: Vec::new(),
+            bindable_groups: Vec::new(),
+            key_switch_supported: false,
+            keys_truncated: false,
+            key_list_error: None,
             today_cost: None,
             month_cost: None,
             updated_at: now_iso(),
@@ -817,11 +864,543 @@ impl Sub2Client {
             error_accounts: errors,
             rate_limited_accounts: rate_limited,
             unschedulable_accounts: unschedulable,
+            api_keys: Vec::new(),
+            bindable_groups: Vec::new(),
+            key_switch_supported: false,
+            keys_truncated: false,
+            key_list_error: None,
             today_cost: None,
             month_cost: None,
             updated_at: now_iso(),
             error: None,
         })
+    }
+
+    /// Change one API key's group. `group_id` 0 clears the binding.
+    /// Does not send `reset_rate_limit_usage`.
+    pub async fn switch_api_key_group(
+        &self,
+        site_id: &str,
+        base_url: &str,
+        email: Option<&str>,
+        key_id: i64,
+        group_id: i64,
+    ) -> Result<(), KeySwitchError> {
+        let password = Store::get_secret(site_id, "password");
+        let token = self
+            .ensure_access_token(site_id, base_url, email, password.as_deref())
+            .await
+            .map_err(|e| KeySwitchError::Failed(e.to_string()))?;
+        match self.put_key_group(base_url, &token, key_id, group_id).await {
+            Err(KeySwitchError::Unauthorized) => {
+                Store::delete_secret(site_id, "access_token");
+                let token = self
+                    .ensure_access_token(site_id, base_url, email, password.as_deref())
+                    .await
+                    .map_err(|e| KeySwitchError::Failed(e.to_string()))?;
+                self.put_key_group(base_url, &token, key_id, group_id).await
+            }
+            other => other,
+        }
+    }
+
+    pub fn remember_switch_support(&self, base_url: &str, supported: bool) {
+        let mut map = self
+            .switch_support
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        map.insert(base_url.trim_end_matches('/').to_string(), supported);
+    }
+
+    pub async fn load_key_state(
+        &self,
+        site_id: &str,
+        base_url: &str,
+        email: Option<&str>,
+    ) -> Result<(KeyCatalog, bool), ClientError> {
+        let password = Store::get_secret(site_id, "password");
+        let token = self
+            .ensure_access_token(site_id, base_url, email, password.as_deref())
+            .await?;
+        match self.load_key_state_with_token(base_url, &token).await {
+            Err(e) if is_unauthorized(&e) => {
+                Store::delete_secret(site_id, "access_token");
+                let token = self
+                    .ensure_access_token(site_id, base_url, email, password.as_deref())
+                    .await?;
+                self.load_key_state_with_token(base_url, &token).await
+            }
+            other => other,
+        }
+    }
+
+    async fn attach_key_catalog(
+        &self,
+        site_id: &str,
+        base_url: &str,
+        email: Option<&str>,
+        token: &str,
+        snap: &mut AdminSnapshot,
+    ) {
+        let loaded = match self.load_key_state_with_token(base_url, token).await {
+            Ok(v) => Ok(v),
+            Err(e) if is_unauthorized(&e) => {
+                Store::delete_secret(site_id, "access_token");
+                match self
+                    .ensure_access_token(
+                        site_id,
+                        base_url,
+                        email,
+                        Store::get_secret(site_id, "password").as_deref(),
+                    )
+                    .await
+                {
+                    Ok(token) => self.load_key_state_with_token(base_url, &token).await,
+                    Err(e2) => Err(e2),
+                }
+            }
+            Err(e) => Err(e),
+        };
+        match loaded {
+            Ok((cat, supported)) => apply_catalog(snap, cat, supported),
+            Err(e) => {
+                snap.api_keys.clear();
+                snap.bindable_groups.clear();
+                snap.keys_truncated = false;
+                snap.key_list_error = Some(e.to_string());
+            }
+        }
+    }
+
+    async fn load_key_state_with_token(
+        &self,
+        base_url: &str,
+        token: &str,
+    ) -> Result<(KeyCatalog, bool), ClientError> {
+        let (catalog, support) = tokio::join!(
+            self.fetch_key_catalog(base_url, token),
+            self.probe_switch_support(base_url, token),
+        );
+        let catalog = catalog?;
+        let supported = match support {
+            Ok(v) => v,
+            Err(e) if is_unauthorized(&e) => return Err(e),
+            Err(_) => true,
+        };
+        Ok((catalog, supported))
+    }
+
+    async fn probe_switch_support(&self, base_url: &str, token: &str) -> Result<bool, ClientError> {
+        let key = base_url.trim_end_matches('/').to_string();
+        if let Some(known) = self
+            .switch_support
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&key)
+            .copied()
+        {
+            return Ok(known);
+        }
+        // Non-numeric id: a deployed route answers 400, a missing route answers 404.
+        // This does not change any key.
+        let url = Self::join(base_url, "/api/v1/admin/api-keys/abc");
+        let resp = self
+            .http
+            .put(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&serde_json::json!({ "group_id": 1 }))
+            .send()
+            .await?;
+        let status = resp.status();
+        let _ = resp.bytes().await;
+        if status.as_u16() == 401 {
+            return Err(ClientError::Message("401 Unauthorized".into()));
+        }
+        let supported = status.as_u16() != 404;
+        self.remember_switch_support(base_url, supported);
+        Ok(supported)
+    }
+
+    async fn put_key_group(
+        &self,
+        base_url: &str,
+        token: &str,
+        key_id: i64,
+        group_id: i64,
+    ) -> Result<(), KeySwitchError> {
+        let url = Self::join(base_url, &format!("/api/v1/admin/api-keys/{key_id}"));
+        let resp = self
+            .http
+            .put(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&serde_json::json!({ "group_id": group_id }))
+            .send()
+            .await
+            .map_err(|e| KeySwitchError::Failed(e.to_string()))?;
+        let status = resp.status();
+        if status.is_success() {
+            let _ = resp.bytes().await;
+            return Ok(());
+        }
+        if status.as_u16() == 401 {
+            let _ = resp.bytes().await;
+            return Err(KeySwitchError::Unauthorized);
+        }
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        let msg = body
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if status.as_u16() == 404
+            && (msg.is_empty()
+                || msg.eq_ignore_ascii_case("404")
+                || msg.to_ascii_lowercase().contains("page not found"))
+        {
+            self.remember_switch_support(base_url, false);
+            return Err(KeySwitchError::Unsupported);
+        }
+        let msg = if msg.is_empty() {
+            "切换分组失败".to_string()
+        } else {
+            truncate_chars(msg, 120)
+        };
+        Err(KeySwitchError::Failed(msg))
+    }
+
+    async fn fetch_key_catalog(
+        &self,
+        base_url: &str,
+        token: &str,
+    ) -> Result<KeyCatalog, ClientError> {
+        let mut list_error: Option<String> = None;
+        let groups = match self
+            .admin_get(base_url, token, "/api/v1/admin/groups/all", &[])
+            .await
+        {
+            Ok(body) => {
+                let mut groups = parse_bindable_groups(&body);
+                if groups.len() > MAX_BINDABLE_GROUPS {
+                    groups.truncate(MAX_BINDABLE_GROUPS);
+                }
+                groups
+            }
+            Err(e) if is_unauthorized(&e) => return Err(e),
+            Err(e) => {
+                list_error = Some(format!("分组列表失败: {e}"));
+                Vec::new()
+            }
+        };
+
+        let mut keys = Vec::new();
+        let mut reported = 0i64;
+        let mut truncated = false;
+        let mut page = 1i64;
+        loop {
+            let page_s = page.to_string();
+            let size_s = KEY_PAGE_SIZE.to_string();
+            let body = match self
+                .admin_get(
+                    base_url,
+                    token,
+                    "/api/v1/admin/users",
+                    &[("page", page_s.as_str()), ("page_size", size_s.as_str())],
+                )
+                .await
+            {
+                Ok(body) => body,
+                Err(e) if is_unauthorized(&e) => return Err(e),
+                Err(e) => {
+                    list_error = Some(format!("用户列表失败: {e}"));
+                    break;
+                }
+            };
+            let (ids, total_users) = parse_id_page(&body);
+            if ids.is_empty() {
+                break;
+            }
+            for user_id in ids {
+                if keys.len() >= MAX_API_KEYS {
+                    truncated = true;
+                    break;
+                }
+                match self
+                    .fetch_user_keys(base_url, token, user_id, MAX_API_KEYS - keys.len())
+                    .await
+                {
+                    Ok((batch, total)) => {
+                        reported += total;
+                        let batch_len = batch.len() as i64;
+                        if batch_len < total {
+                            truncated = true;
+                        }
+                        keys.extend(batch);
+                    }
+                    Err(e) if is_unauthorized(&e) => return Err(e),
+                    Err(e) => {
+                        list_error = Some(format!("密钥列表失败: {e}"));
+                        truncated = true;
+                        break;
+                    }
+                }
+            }
+            if truncated || keys.len() >= MAX_API_KEYS {
+                if (page * KEY_PAGE_SIZE) < total_users {
+                    truncated = true;
+                }
+                break;
+            }
+            if page * KEY_PAGE_SIZE >= total_users || page >= 20 {
+                break;
+            }
+            page += 1;
+        }
+        if reported > keys.len() as i64 {
+            truncated = true;
+        }
+        resolve_key_group_names(&mut keys, &groups);
+        keys.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then(a.id.cmp(&b.id))
+        });
+
+        Ok(KeyCatalog {
+            keys,
+            groups,
+            truncated,
+            list_error,
+        })
+    }
+
+    async fn fetch_user_keys(
+        &self,
+        base_url: &str,
+        token: &str,
+        user_id: i64,
+        remaining: usize,
+    ) -> Result<(Vec<ApiKeyBinding>, i64), ClientError> {
+        let mut out = Vec::new();
+        let mut total = 0i64;
+        let mut page = 1i64;
+        let path = format!("/api/v1/admin/users/{user_id}/api-keys");
+        loop {
+            let page_s = page.to_string();
+            let size_s = KEY_PAGE_SIZE.to_string();
+            let body = self
+                .admin_get(
+                    base_url,
+                    token,
+                    &path,
+                    &[("page", page_s.as_str()), ("page_size", size_s.as_str())],
+                )
+                .await?;
+            let (batch, page_total) = parse_api_key_page(&body);
+            total = page_total.max(total);
+            if batch.is_empty() {
+                break;
+            }
+            for key in batch {
+                if out.len() >= remaining {
+                    break;
+                }
+                out.push(key);
+            }
+            if out.len() >= remaining || out.len() as i64 >= total || page >= 10 {
+                break;
+            }
+            page += 1;
+        }
+        Ok((out, total))
+    }
+
+    async fn admin_get(
+        &self,
+        base_url: &str,
+        token: &str,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<Value, ClientError> {
+        let url = Self::join_query(base_url, path, query);
+        let resp = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await?;
+        let status = resp.status();
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        if status.as_u16() == 401 {
+            return Err(ClientError::Message("401 Unauthorized".into()));
+        }
+        if !status.is_success() {
+            let msg = body
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("请求失败");
+            return Err(ClientError::Message(format!("{msg} ({status})")));
+        }
+        Ok(body)
+    }
+}
+
+fn apply_catalog(snap: &mut AdminSnapshot, cat: KeyCatalog, supported: bool) {
+    snap.api_keys = cat.keys;
+    snap.bindable_groups = cat.groups;
+    snap.keys_truncated = cat.truncated;
+    snap.key_list_error = cat.list_error;
+    snap.key_switch_supported = supported;
+}
+
+fn is_unauthorized(err: &ClientError) -> bool {
+    let text = err.to_string();
+    text.contains("401") || text.contains("Unauthorized")
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    let count = s.chars().count();
+    if count <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+fn parse_bindable_groups(body: &Value) -> Vec<BindableGroup> {
+    let data = unwrap_payload(body);
+    let items = data
+        .get("items")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .or_else(|| data.as_array().cloned())
+        .unwrap_or_default();
+    let mut raw = Vec::new();
+    for g in items {
+        let id = g.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+        if id <= 0 {
+            continue;
+        }
+        let status = g.get("status").and_then(|v| v.as_str()).unwrap_or("active");
+        if status != "active" {
+            continue;
+        }
+        let name = g
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let sort = g.get("sort_order").and_then(|v| v.as_i64()).unwrap_or(0);
+        let platform = g
+            .get("platform")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        raw.push((
+            sort,
+            name.to_lowercase(),
+            BindableGroup { id, name, platform },
+        ));
+    }
+    raw.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.id.cmp(&b.2.id)));
+    raw.into_iter().map(|(_, _, g)| g).collect()
+}
+
+fn parse_id_page(body: &Value) -> (Vec<i64>, i64) {
+    let data = unwrap_payload(body);
+    let items = data
+        .get("items")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let total = data
+        .get("total")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(items.len() as i64);
+    let ids = items
+        .iter()
+        .filter_map(|u| u.get("id").and_then(|v| v.as_i64()))
+        .filter(|id| *id > 0)
+        .collect();
+    (ids, total)
+}
+
+fn parse_api_key_page(body: &Value) -> (Vec<ApiKeyBinding>, i64) {
+    let data = unwrap_payload(body);
+    let items = data
+        .get("items")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .or_else(|| data.as_array().cloned())
+        .unwrap_or_default();
+    let total = data
+        .get("total")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(items.len() as i64);
+    let keys = items.iter().filter_map(parse_api_key_item).collect();
+    (keys, total)
+}
+
+fn parse_api_key_item(v: &Value) -> Option<ApiKeyBinding> {
+    let id = v.get("id").and_then(|x| x.as_i64()).filter(|id| *id > 0)?;
+    let mut name = v
+        .get("name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        name = format!("密钥 #{id}");
+    }
+    let group_id = v
+        .get("group_id")
+        .and_then(|x| x.as_i64())
+        .filter(|id| *id > 0)
+        .or_else(|| {
+            v.pointer("/group/id")
+                .and_then(|x| x.as_i64())
+                .filter(|id| *id > 0)
+        });
+    let group_name = v
+        .pointer("/group/name")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let status = v
+        .get("status")
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("active")
+        .to_string();
+    Some(ApiKeyBinding {
+        id,
+        name,
+        group_id,
+        group_name,
+        status,
+        switch_error: None,
+    })
+}
+
+fn resolve_key_group_names(keys: &mut [ApiKeyBinding], groups: &[BindableGroup]) {
+    for key in keys.iter_mut() {
+        let missing = key
+            .group_name
+            .as_ref()
+            .map(|s| s.is_empty())
+            .unwrap_or(true);
+        if !missing {
+            continue;
+        }
+        if let Some(id) = key.group_id {
+            key.group_name = groups.iter().find(|g| g.id == id).map(|g| g.name.clone());
+        }
     }
 }
 
@@ -834,7 +1413,10 @@ enum AccountClass {
 }
 
 fn classify_ops_account(v: &Value) -> AccountClass {
-    let has_error = v.get("has_error").and_then(|x| x.as_bool()).unwrap_or(false)
+    let has_error = v
+        .get("has_error")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false)
         || v.get("status").and_then(|x| x.as_str()) == Some("error");
     let rate_limited = v
         .get("is_rate_limited")
@@ -904,6 +1486,11 @@ fn error_admin(site_id: &str, msg: String) -> AdminSnapshot {
         error_accounts: 0,
         rate_limited_accounts: 0,
         unschedulable_accounts: 0,
+        api_keys: Vec::new(),
+        bindable_groups: Vec::new(),
+        key_switch_supported: false,
+        keys_truncated: false,
+        key_list_error: None,
         today_cost: None,
         month_cost: None,
         updated_at: now_iso(),
@@ -1277,7 +1864,13 @@ mod tests {
     #[test]
     fn live_today_actual_not_replaced_by_series_or_subscription() {
         let today = ymd(0);
-        let earlier = ymd(3);
+        // Stay inside the current calendar month. Three days ago is last month on the 1st–3rd.
+        let earlier = Local::now()
+            .date_naive()
+            .with_day(1)
+            .unwrap()
+            .format("%Y-%m-%d")
+            .to_string();
         let body = json!({
             "mode": "unrestricted",
             "balance": 12.5,
@@ -1391,20 +1984,112 @@ mod tests {
     #[test]
     fn classify_ops_account_partitions_status() {
         assert_eq!(
-            classify_ops_account(&json!({"is_available": true, "has_error": false, "is_rate_limited": false})),
+            classify_ops_account(
+                &json!({"is_available": true, "has_error": false, "is_rate_limited": false})
+            ),
             AccountClass::Available
         );
         assert_eq!(
-            classify_ops_account(&json!({"is_available": false, "has_error": true, "is_rate_limited": true})),
+            classify_ops_account(
+                &json!({"is_available": false, "has_error": true, "is_rate_limited": true})
+            ),
             AccountClass::Error
         );
         assert_eq!(
-            classify_ops_account(&json!({"is_available": false, "has_error": false, "is_rate_limited": true})),
+            classify_ops_account(
+                &json!({"is_available": false, "has_error": false, "is_rate_limited": true})
+            ),
             AccountClass::RateLimited
         );
         assert_eq!(
-            classify_ops_account(&json!({"is_available": false, "has_error": false, "is_rate_limited": false, "is_overloaded": true})),
+            classify_ops_account(
+                &json!({"is_available": false, "has_error": false, "is_rate_limited": false, "is_overloaded": true})
+            ),
             AccountClass::Unschedulable
         );
+    }
+
+    #[test]
+    fn parse_api_keys_drops_secret_and_keeps_group() {
+        let body = json!({
+            "code": 0,
+            "message": "success",
+            "data": {
+                "items": [{
+                    "id": 7,
+                    "name": "Gpt-free",
+                    "key": "sk-secret-value",
+                    "group_id": 2,
+                    "status": "active",
+                    "user": { "email": "person@example.com", "id": 3 },
+                    "group": { "id": 2, "name": "ChatGpt(free号池)" },
+                    "ip_whitelist": ["10.0.0.1"],
+                    "last_used_ip": "10.1.1.1"
+                }],
+                "total": 1
+            }
+        });
+        let (keys, total) = parse_api_key_page(&body);
+        assert_eq!(total, 1);
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].name, "Gpt-free");
+        assert_eq!(keys[0].group_id, Some(2));
+        assert_eq!(keys[0].group_name.as_deref(), Some("ChatGpt(free号池)"));
+        let dumped = serde_json::to_string(&keys[0]).unwrap();
+        assert!(!dumped.contains("sk-secret"));
+        assert!(!dumped.contains("person@example.com"));
+        assert!(!dumped.contains("10.0.0.1"));
+        assert!(!dumped.contains("10.1.1.1"));
+    }
+
+    #[test]
+    fn unbound_key_has_no_group_and_empty_name_gets_fallback() {
+        let body = json!({
+            "code": 0,
+            "message": "success",
+            "data": {
+                "items": [{ "id": 4, "name": "  ", "group_id": 0, "status": "active" }],
+                "total": 1
+            }
+        });
+        let (keys, _) = parse_api_key_page(&body);
+        assert_eq!(keys[0].name, "密钥 #4");
+        assert_eq!(keys[0].group_id, None);
+        assert_eq!(keys[0].group_name, None);
+    }
+
+    #[test]
+    fn parse_groups_keeps_active_and_sorts() {
+        let body = json!({
+            "code": 0,
+            "data": [
+                { "id": 5, "name": "上游中转", "status": "active", "platform": "openai", "sort_order": 4 },
+                { "id": 9, "name": "停用池", "status": "disabled", "sort_order": 0 },
+                { "id": 2, "name": "ChatGpt(free号池)", "status": "active", "platform": "openai", "sort_order": 1 },
+                { "id": 1, "name": "", "status": "active", "sort_order": 0 }
+            ]
+        });
+        let groups = parse_bindable_groups(&body);
+        assert_eq!(groups.iter().map(|g| g.id).collect::<Vec<_>>(), vec![2, 5]);
+        assert_eq!(groups[0].platform.as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn resolve_group_name_from_catalog_when_nested_group_missing() {
+        let mut keys = vec![ApiKeyBinding {
+            id: 3,
+            name: "Gpt-pro".into(),
+            group_id: Some(3),
+            group_name: None,
+            status: "active".into(),
+            switch_error: None,
+        }];
+        let groups = vec![BindableGroup {
+            id: 3,
+            name: "ChatGpt(team号池)".into(),
+            platform: None,
+        }];
+        resolve_key_group_names(&mut keys, &groups);
+        assert_eq!(keys[0].group_name.as_deref(), Some("ChatGpt(team号池)"));
     }
 }

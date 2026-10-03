@@ -4,13 +4,13 @@ mod hud;
 mod models;
 mod state;
 mod store;
+mod tray;
 
 use state::{spawn_poller, AppState};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{
     image::Image,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, Position, WindowEvent,
 };
@@ -32,29 +32,8 @@ pub fn run() {
             })?);
             app.manage(state.clone());
 
-            // Right-click tray menu is the only chrome.
-            let show_i = MenuItem::with_id(app, "show", "显示监控", true, None::<&str>)?;
-            let hide_i = MenuItem::with_id(app, "hide", "隐藏监控", true, None::<&str>)?;
-            let refresh_i = MenuItem::with_id(app, "refresh", "立即刷新", true, None::<&str>)?;
-            let settings_i = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
-            let reset_pos_i =
-                MenuItem::with_id(app, "reset_pos", "重置窗口位置", true, None::<&str>)?;
-            let quit_i = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let sep1 = PredefinedMenuItem::separator(app)?;
-            let sep2 = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(
-                app,
-                &[
-                    &show_i,
-                    &hide_i,
-                    &sep1,
-                    &refresh_i,
-                    &settings_i,
-                    &reset_pos_i,
-                    &sep2,
-                    &quit_i,
-                ],
-            )?;
+            // Right-click tray menu is the only chrome. Key submenus are filled after refresh.
+            let menu = tray::build_tray_menu(app, &tray::TrayModel::default())?;
 
             let icon = app.default_window_icon().cloned().unwrap_or_else(|| {
                 Image::from_bytes(include_bytes!("../icons/32x32.png")).expect("icon")
@@ -100,7 +79,17 @@ pub fn run() {
                         "quit" => {
                             app.exit(0);
                         }
-                        _ => {}
+                        other => {
+                            if let Some((site_id, key_id, group_id)) =
+                                tray::parse_key_group_menu_id(other)
+                            {
+                                let app2 = app.clone();
+                                let st = state.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    st.switch_key_group(&app2, site_id, key_id, group_id).await;
+                                });
+                            }
+                        }
                     }
                 })
                 .on_tray_icon_event(|tray, event| {

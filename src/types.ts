@@ -68,6 +68,21 @@ export interface GroupHealth {
   error: number;
 }
 
+export interface ApiKeyBinding {
+  id: number;
+  name: string;
+  groupId?: number | null;
+  groupName?: string | null;
+  status: string;
+  switchError?: string | null;
+}
+
+export interface BindableGroup {
+  id: number;
+  name: string;
+  platform?: string | null;
+}
+
 export interface AdminSnapshot {
   siteId: string;
   monitoringEnabled: boolean;
@@ -78,6 +93,11 @@ export interface AdminSnapshot {
   errorAccounts: number;
   rateLimitedAccounts: number;
   unschedulableAccounts?: number;
+  apiKeys?: ApiKeyBinding[];
+  bindableGroups?: BindableGroup[];
+  keySwitchSupported?: boolean;
+  keysTruncated?: boolean;
+  keyListError?: string | null;
   todayCost?: number | null;
   monthCost?: number | null;
   updatedAt: string;
