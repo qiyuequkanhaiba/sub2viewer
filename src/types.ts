@@ -68,6 +68,19 @@ export interface GroupHealth {
   error: number;
 }
 
+export interface AccountIssue {
+  name: string;
+  kind: string;
+  status: string;
+  detail?: string | null;
+}
+
+export interface SiteDelta {
+  spanSecs: number;
+  balance?: number | null;
+  errors?: number | null;
+}
+
 export interface ApiKeyBinding {
   id: number;
   name: string;
@@ -93,6 +106,7 @@ export interface AdminSnapshot {
   errorAccounts: number;
   rateLimitedAccounts: number;
   unschedulableAccounts?: number;
+  issues?: AccountIssue[];
   apiKeys?: ApiKeyBinding[];
   bindableGroups?: BindableGroup[];
   keySwitchSupported?: boolean;
@@ -108,6 +122,7 @@ export interface SiteSnapshot {
   site: SitePublic;
   user?: UserSnapshot | null;
   admin?: AdminSnapshot | null;
+  delta?: SiteDelta | null;
 }
 
 export interface Thresholds {
@@ -126,6 +141,7 @@ export interface AppSettingsPublic {
   criticalHealthPct: number;
   warnAvailableCount: number;
   criticalAvailableCount: number;
+  launchAtLogin?: boolean;
   sites: SitePublic[];
 }
 

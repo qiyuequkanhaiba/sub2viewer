@@ -19,7 +19,7 @@ pub enum StoreError {
 /// Local secret vault. Keychain is avoided because unsigned / accessory
 /// (menu-bar) apps routinely fail the macOS "allow access" dialog even after
 /// the user types the login password.
-fn data_dir() -> PathBuf {
+pub(crate) fn data_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("sub2viewer")

@@ -37,6 +37,7 @@ const settingsForm = reactive({
   criticalBalanceUsd: 1,
   warnAvailableCount: 5,
   criticalAvailableCount: 2,
+  launchAtLogin: false,
 });
 
 const editing = computed(() => !!form.id);
@@ -47,6 +48,15 @@ const twoFa = reactive({
   code: "",
   emailMasked: "",
   active: false,
+});
+
+const login = reactive({
+  active: false,
+  siteId: "",
+  siteName: "",
+  email: "",
+  password: "",
+  busy: false,
 });
 
 async function load() {
@@ -60,6 +70,7 @@ async function load() {
   settingsForm.warnAvailableCount = state.value.settings.warnAvailableCount ?? 5;
   settingsForm.criticalAvailableCount =
     state.value.settings.criticalAvailableCount ?? 2;
+  settingsForm.launchAtLogin = !!state.value.settings.launchAtLogin;
 }
 
 function resetForm() {
@@ -141,6 +152,7 @@ async function persistSettings() {
       criticalBalanceUsd: critBal,
       warnAvailableCount: warnAvail,
       criticalAvailableCount: critAvail,
+      launchAtLogin: settingsForm.launchAtLogin,
     });
     error.value = "";
   } catch (e) {
@@ -158,25 +170,44 @@ function schedulePersist() {
 
 watch(settingsForm, schedulePersist, { deep: true });
 
-async function doAdminLogin(site: SitePublic) {
-  const email = prompt("管理员邮箱", site.email || "") || "";
-  const password = prompt("管理员密码") || "";
-  if (!email || !password) return;
+function openLogin(site: SitePublic) {
+  login.active = true;
+  login.siteId = site.id;
+  login.siteName = site.name;
+  login.email = site.email || "";
+  login.password = "";
+  twoFa.active = false;
+  error.value = "";
+  message.value = "";
+}
+
+async function submitLogin() {
+  if (!login.email.trim() || !login.password) {
+    error.value = "请填写邮箱和密码";
+    return;
+  }
+  login.busy = true;
+  error.value = "";
   try {
-    const res = await adminLogin(site.id, email, password);
+    const res = await adminLogin(login.siteId, login.email.trim(), login.password);
+    login.password = "";
     if (res.requires2fa && res.tempToken) {
       twoFa.active = true;
-      twoFa.siteId = site.id;
+      twoFa.siteId = login.siteId;
       twoFa.tempToken = res.tempToken;
-      twoFa.emailMasked = res.userEmailMasked || email;
+      twoFa.emailMasked = res.userEmailMasked || login.email;
       twoFa.code = "";
+      login.active = false;
       message.value = "需要 2FA 验证码";
     } else {
+      login.active = false;
       message.value = res.message || "登录成功";
     }
     await load();
   } catch (e) {
     error.value = String(e);
+  } finally {
+    login.busy = false;
   }
 }
 
@@ -310,6 +341,11 @@ onUnmounted(() => {
           </label>
         </div>
       </div>
+
+      <label class="check launch">
+        <input v-model="settingsForm.launchAtLogin" type="checkbox" />
+        <span>登录 macOS 时自动启动</span>
+      </label>
     </section>
 
     <!-- Split View for Sites & Editor -->
@@ -344,7 +380,7 @@ onUnmounted(() => {
                 v-if="site.role === 'admin'"
                 class="btn"
                 type="button"
-                @click="doAdminLogin(site)"
+                @click="openLogin(site)"
               >
                 登录
               </button>
@@ -358,6 +394,29 @@ onUnmounted(() => {
       <!-- Site Editor Form -->
       <section class="panel editor">
         <h2>{{ editing ? "编辑站点" : "添加新站点" }}</h2>
+
+        <div v-if="login.active" class="twofa login-box">
+          <strong>登录 {{ login.siteName }}</strong>
+          <label class="field">
+            <span>管理员邮箱</span>
+            <input v-model="login.email" type="email" autocomplete="username" />
+          </label>
+          <label class="field">
+            <span>管理员密码</span>
+            <input
+              v-model="login.password"
+              type="password"
+              autocomplete="current-password"
+              @keydown.enter.prevent="submitLogin"
+            />
+          </label>
+          <div class="acts">
+            <button class="btn primary" type="button" :disabled="login.busy" @click="submitLogin">
+              登录
+            </button>
+            <button class="btn" type="button" @click="login.active = false">取消</button>
+          </div>
+        </div>
 
         <div v-if="twoFa.active" class="twofa">
           <strong>2FA 二次验证 — {{ twoFa.emailMasked }}</strong>
@@ -538,6 +597,10 @@ onUnmounted(() => {
   font-weight: 600;
   color: #30d158;
   white-space: nowrap;
+}
+
+.launch {
+  margin-top: 10px;
 }
 
 .threshold-grid {
@@ -836,6 +899,7 @@ onUnmounted(() => {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  overflow: auto;
 }
 
 .twofa {
@@ -851,6 +915,16 @@ onUnmounted(() => {
   margin-bottom: 6px;
   font-size: 11px;
   color: #ff9f0a;
+}
+
+.login-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.login-box .field input {
+  width: 100%;
 }
 
 .inline {

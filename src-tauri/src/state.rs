@@ -1,4 +1,6 @@
+use crate::alerts::AlertThresholds;
 use crate::client::{KeySwitchError, Sub2Client};
+use crate::history::History;
 use crate::models::{
     ApiKeyBinding, AppSettings, AppSettingsPublic, AppStateView, BindableGroup, SiteConfig,
     SitePublic, SiteRole, SiteSnapshot, SiteUpsert,
@@ -7,7 +9,7 @@ use crate::store::Store;
 use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -19,6 +21,7 @@ pub struct AppState {
     pub last_refresh_at: RwLock<Option<String>>,
     pub refreshing: RwLock<bool>,
     switching_keys: Mutex<HashSet<String>>,
+    history: Mutex<History>,
 }
 
 impl AppState {
@@ -33,6 +36,7 @@ impl AppState {
             last_refresh_at: RwLock::new(None),
             refreshing: RwLock::new(false),
             switching_keys: Mutex::new(HashSet::new()),
+            history: Mutex::new(History::load()),
         })
     }
 
@@ -49,6 +53,7 @@ impl AppState {
             critical_health_pct: settings.critical_health_pct,
             warn_available_count: settings.warn_available_count,
             critical_available_count: settings.critical_available_count,
+            launch_at_login: settings.launch_at_login,
             sites: settings.sites.iter().map(Store::to_public).collect(),
         }
     }
@@ -68,6 +73,13 @@ impl AppState {
             }
         }
         snapshots.sort_by(|a, b| a.site.name.cmp(&b.site.name));
+        let now_ms = Utc::now().timestamp_millis();
+        {
+            let history = self.history.lock().unwrap_or_else(|p| p.into_inner());
+            for snap in &mut snapshots {
+                snap.delta = history.delta_for(snap, now_ms);
+            }
+        }
         AppStateView {
             settings,
             snapshots,
@@ -154,6 +166,11 @@ impl AppState {
             .map_err(|e| e.to_string())?;
         Store::delete_all_secrets(site_id);
         self.snapshots.write().await.remove(site_id);
+        {
+            let mut history = self.history.lock().unwrap_or_else(|p| p.into_inner());
+            history.remove(site_id);
+            history.save();
+        }
         Ok(())
     }
 
@@ -167,6 +184,7 @@ impl AppState {
         critical_health_pct: Option<f64>,
         warn_available_count: Option<i64>,
         critical_available_count: Option<i64>,
+        launch_at_login: Option<bool>,
     ) -> Result<(), String> {
         let mut settings = self.settings.write().await;
         if let Some(v) = refresh_interval_secs {
@@ -199,6 +217,9 @@ impl AppState {
         }
         if settings.warn_available_count < settings.critical_available_count {
             settings.warn_available_count = settings.critical_available_count;
+        }
+        if let Some(enabled) = launch_at_login {
+            settings.launch_at_login = enabled;
         }
         self.store
             .save_settings(&settings)
@@ -268,13 +289,47 @@ impl AppState {
             }
         }
 
-        *self.last_refresh_at.write().await = Some(Utc::now().to_rfc3339());
+        let refreshed_at = Utc::now();
+        *self.last_refresh_at.write().await = Some(refreshed_at.to_rfc3339());
         *self.refreshing.write().await = false;
+
+        let thresholds = {
+            let settings = self.settings.read().await;
+            AlertThresholds {
+                warn_balance: settings.warn_balance_usd,
+                critical_balance: settings.critical_balance_usd,
+                warn_available: settings.warn_available_count,
+                critical_available: settings.critical_available_count,
+            }
+        };
+        let keep_ids = {
+            let settings = self.settings.read().await;
+            settings.sites.iter().map(|site| site.id.clone()).collect()
+        };
+        let notes = {
+            let map = self.snapshots.read().await;
+            let mut history = self.history.lock().unwrap_or_else(|p| p.into_inner());
+            let mut notes = Vec::new();
+            let now_ms = refreshed_at.timestamp_millis();
+            for snap in map.values() {
+                history.record_sample(snap, now_ms);
+                if let Some(body) = history.take_alert(snap, thresholds) {
+                    notes.push(body);
+                }
+            }
+            history.retain(&keep_ids);
+            history.save();
+            notes
+        };
+
         let _ = app.emit("refreshing", false);
         self.emit_state(app).await;
         update_tray_tooltip(app, self).await;
         let view = self.view().await;
         crate::tray::apply_tray_menu(app, &view);
+        for body in notes {
+            notify(app, &body);
+        }
     }
 
     pub async fn switch_key_group(
@@ -491,6 +546,7 @@ async fn refresh_one(client: &Sub2Client, site: SiteConfig) -> SiteSnapshot {
                 site: public,
                 user: Some(user),
                 admin: None,
+                delta: None,
             }
         }
         SiteRole::Admin => {
@@ -501,6 +557,7 @@ async fn refresh_one(client: &Sub2Client, site: SiteConfig) -> SiteSnapshot {
                 site: public,
                 user: None,
                 admin: Some(admin),
+                delta: None,
             }
         }
     }
@@ -548,6 +605,28 @@ async fn update_tray_tooltip(app: &AppHandle, state: &AppState) {
 
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_tooltip(Some(tooltip));
+    }
+    crate::tray::apply_status_title(app, &view);
+}
+
+pub fn schedule_tray_refresh(app: &AppHandle) {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        update_tray_tooltip(&app, &state).await;
+    });
+}
+
+fn notify(app: &AppHandle, body: &str) {
+    use tauri_plugin_notification::NotificationExt;
+    if let Err(err) = app
+        .notification()
+        .builder()
+        .title("Sub2Viewer")
+        .body(body)
+        .show()
+    {
+        log::warn!("notification failed: {err}");
     }
 }
 

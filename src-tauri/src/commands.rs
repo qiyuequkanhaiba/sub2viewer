@@ -53,6 +53,7 @@ pub async fn update_settings(
     state: State<'_, Arc<AppState>>,
     input: SettingsUpdate,
 ) -> Result<(), String> {
+    let previous_launch = state.settings.read().await.launch_at_login;
     state
         .update_settings(
             input.refresh_interval_secs,
@@ -63,9 +64,28 @@ pub async fn update_settings(
             input.critical_health_pct,
             input.warn_available_count,
             input.critical_available_count,
+            input.launch_at_login,
         )
         .await?;
+    if input
+        .launch_at_login
+        .is_some_and(|enabled| enabled != previous_launch)
+    {
+        sync_launch_at_login(&app, input.launch_at_login.unwrap_or(previous_launch))?;
+    }
     state.emit_state(&app).await;
+    Ok(())
+}
+
+pub fn sync_launch_at_login(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let auto = app.autolaunch();
+    let current = auto.is_enabled().map_err(|err| err.to_string())?;
+    if enabled && !current {
+        auto.enable().map_err(|err| err.to_string())?;
+    } else if !enabled && current {
+        auto.disable().map_err(|err| err.to_string())?;
+    }
     Ok(())
 }
 
@@ -214,6 +234,9 @@ pub fn show_panel(app: AppHandle) -> Result<(), String> {
         let _ = win.show();
         let _ = win.set_focus();
     }
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_title(None::<&str>);
+    }
     Ok(())
 }
 
@@ -222,6 +245,7 @@ pub fn hide_panel(app: AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("panel") {
         let _ = win.hide();
     }
+    crate::state::schedule_tray_refresh(&app);
     Ok(())
 }
 

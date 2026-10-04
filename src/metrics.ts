@@ -1,4 +1,9 @@
-import type { SiteSnapshot, Thresholds } from "./types";
+import type {
+  RateLimitWindow,
+  SiteSnapshot,
+  Thresholds,
+  UserSnapshot,
+} from "./types";
 import { formatUsd } from "./utils";
 
 export type Tone = "ok" | "warn" | "bad" | "info" | "muted";
@@ -104,6 +109,7 @@ export interface SiteRow {
   todayCost: number;
   monthCost: number;
   kind: "user" | "admin";
+  meta?: string;
 }
 
 export interface MergedMetricView {
@@ -242,6 +248,8 @@ export function mergeMetrics(
       : "0"
     : undefined;
   const hero = [heroBalance, heroAccounts].filter(Boolean).join("  ") || "—";
+  const userCount = snapshots.filter((item) => item.user).length;
+  const adminCount = snapshots.filter((item) => item.admin).length;
 
   const remainPct = Math.round(
     parts.reduce((a, p) => a + p.remainPct, 0) / parts.length,
@@ -282,6 +290,7 @@ export function mergeMetrics(
     rows: snapshots.map((snap, i) => {
       const p = parts[i];
       const spend = siteSpend(snap);
+      const split = snap.user ? userCount > 1 : adminCount > 1;
       return {
         name: p.brand || p.title,
         value: p.hero,
@@ -290,6 +299,7 @@ export function mergeMetrics(
         todayCost: spend.today,
         monthCost: spend.month,
         kind: snap.admin ? "admin" : "user",
+        meta: rowMeta(snap, split),
       };
     }),
   };
@@ -497,4 +507,151 @@ export function keyGroupPanel(snapshots: SiteSnapshot[]): KeyGroupPanel {
     }
   }
   return { visible: true, notes, rows, more };
+}
+
+export interface PoolRow {
+  id: string;
+  site?: string;
+  name: string;
+  available: number;
+  rateLimited: number;
+  error: number;
+}
+
+export function poolPanel(snapshots: SiteSnapshot[]): { visible: boolean; rows: PoolRow[] } {
+  const admins = snapshots.filter(
+    (snap) => snap.site.role === "admin" && (snap.admin?.apiKeys?.length ?? 0) > 0,
+  );
+  const multi = admins.length > 1;
+  const rows: PoolRow[] = [];
+  for (const snap of admins) {
+    const admin = snap.admin!;
+    const seen = new Set<number>();
+    let first = true;
+    for (const key of admin.apiKeys ?? []) {
+      const id = key.groupId ?? 0;
+      if (id <= 0 || seen.has(id) || rows.length >= 6) continue;
+      seen.add(id);
+      const health = admin.groups.find((group) => group.groupId === id);
+      const name =
+        health?.groupName ||
+        admin.bindableGroups?.find((group) => group.id === id)?.name ||
+        key.groupName ||
+        `分组 ${id}`;
+      rows.push({
+        id: `${snap.site.id}:${id}`,
+        site: multi && first ? snap.site.name : undefined,
+        name,
+        available: health?.available ?? 0,
+        rateLimited: health?.rateLimited ?? 0,
+        error: health?.error ?? 0,
+      });
+      first = false;
+    }
+  }
+  return { visible: rows.length > 0, rows };
+}
+
+export function changeLine(snapshots: SiteSnapshot[]): string {
+  let balance = 0;
+  let balanceSpan = 0;
+  let hasBalance = false;
+  let errors = 0;
+  let errorSpan = 0;
+  let hasErrors = false;
+  for (const snap of snapshots) {
+    const delta = snap.delta;
+    if (!delta) continue;
+    if (delta.balance != null && Math.abs(delta.balance) >= 0.005) {
+      balance += delta.balance;
+      balanceSpan = balanceSpan === 0 ? delta.spanSecs : Math.min(balanceSpan, delta.spanSecs);
+      hasBalance = true;
+    }
+    if (delta.errors != null && delta.errors !== 0) {
+      errors += delta.errors;
+      errorSpan = errorSpan === 0 ? delta.spanSecs : Math.min(errorSpan, delta.spanSecs);
+      hasErrors = true;
+    }
+  }
+  const bits: string[] = [];
+  if (hasBalance && Math.abs(balance) >= 0.005) {
+    bits.push(`余额 ${signedUsd(balance)} / ${spanLabel(balanceSpan)}`);
+  }
+  if (hasErrors && errors !== 0) {
+    bits.push(`错误 ${signedInt(errors)} / ${spanLabel(errorSpan)}`);
+  }
+  return bits.join(" · ");
+}
+
+function rowMeta(snap: SiteSnapshot, split: boolean): string {
+  const bits: string[] = [];
+  if (snap.user) bits.push(userMeta(snap.user));
+  if (split) bits.push(ownDelta(snap));
+  return bits.filter(Boolean).join(" · ");
+}
+
+function userMeta(user: UserSnapshot): string {
+  const bits: string[] = [];
+  if (user.subscription?.expiresAt) {
+    const days = Math.ceil(
+      (new Date(user.subscription.expiresAt).getTime() - Date.now()) / 86400000,
+    );
+    if (Number.isFinite(days)) bits.push(days > 0 ? `${days}天后到期` : "已到期");
+  }
+  const dailyLimit = user.subscription?.dailyLimitUsd ?? 0;
+  if (dailyLimit > 0) {
+    bits.push(
+      `日额度 ${formatUsd(user.subscription?.dailyUsageUsd)}/${formatUsd(dailyLimit)}`,
+    );
+  }
+  const window = tightestWindow(user.rateLimits);
+  if (window) {
+    const label = window.window?.trim() || "速率";
+    bits.push(`${label} 剩余 ${compactCount(window.remaining)}`);
+  }
+  if (user.rpm != null && user.rpm > 0) bits.push(`RPM ${compactCount(user.rpm)}`);
+  return bits.slice(0, 3).join(" · ");
+}
+
+function ownDelta(snap: SiteSnapshot): string {
+  const delta = snap.delta;
+  if (!delta) return "";
+  if (snap.user && delta.balance != null && Math.abs(delta.balance) >= 0.005) {
+    return `${signedUsd(delta.balance)} / ${spanLabel(delta.spanSecs)}`;
+  }
+  if (snap.admin && delta.errors != null && delta.errors !== 0) {
+    return `错误 ${signedInt(delta.errors)} / ${spanLabel(delta.spanSecs)}`;
+  }
+  return "";
+}
+
+function tightestWindow(windows: RateLimitWindow[]): RateLimitWindow | undefined {
+  const usable = windows.filter((window) => window.limit > 0 || window.remaining > 0);
+  if (!usable.length) return undefined;
+  return usable.reduce((best, window) => {
+    const ratio = window.limit > 0 ? window.remaining / window.limit : window.remaining;
+    const bestRatio = best.limit > 0 ? best.remaining / best.limit : best.remaining;
+    return ratio < bestRatio ? window : best;
+  });
+}
+
+function spanLabel(secs: number): string {
+  if (secs >= 3000) return "1h";
+  return `${Math.max(1, Math.round(secs / 60))}分`;
+}
+
+function signedUsd(value: number): string {
+  const sign = value > 0 ? "+" : "−";
+  return `${sign}$${Math.abs(value).toFixed(2)}`;
+}
+
+function signedInt(value: number): string {
+  return value > 0 ? `+${value}` : `−${Math.abs(value)}`;
+}
+
+function compactCount(value: number): string {
+  if (!Number.isFinite(value)) return "—";
+  if (Math.abs(value) >= 1000) return `${(value / 1000).toFixed(1)}k`;
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(1);
 }

@@ -1,5 +1,7 @@
+mod alerts;
 mod client;
 mod commands;
+mod history;
 mod hud;
 mod models;
 mod state;
@@ -21,6 +23,11 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             // Menu-bar style: no Dock icon.
             #[cfg(target_os = "macos")]
@@ -50,11 +57,7 @@ pub fn run() {
                         "show" => {
                             show_panel_window(app);
                         }
-                        "hide" => {
-                            if let Some(win) = app.get_webview_window("panel") {
-                                let _ = win.hide();
-                            }
-                        }
+                        "hide" => hide_panel_window(app),
                         "refresh" => {
                             let app2 = app.clone();
                             let st = state.clone();
@@ -73,6 +76,7 @@ pub fn run() {
                                 if let Some(win) = app2.get_webview_window("panel") {
                                     position_near_tray(&win);
                                     let _ = win.show();
+                                    crate::tray::apply_status_title(&app2, &st.view().await);
                                 }
                             });
                         }
@@ -132,6 +136,15 @@ pub fn run() {
                 });
             }
 
+            let launch_app = app.handle().clone();
+            let launch_state = state.clone();
+            tauri::async_runtime::spawn(async move {
+                let enabled = launch_state.settings.read().await.launch_at_login;
+                if let Err(err) = commands::sync_launch_at_login(&launch_app, enabled) {
+                    log::warn!("launch at login sync failed: {err}");
+                }
+            });
+
             spawn_poller(app.handle().clone(), state);
             Ok(())
         })
@@ -159,16 +172,24 @@ fn show_panel_window(app: &tauri::AppHandle) {
         let _ = win.show();
         let _ = win.set_focus();
     }
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_title(None::<&str>);
+    }
+}
+
+fn hide_panel_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("panel") {
+        let _ = win.hide();
+    }
+    state::schedule_tray_refresh(app);
 }
 
 fn toggle_panel_window(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("panel") {
         if win.is_visible().unwrap_or(false) {
-            let _ = win.hide();
+            hide_panel_window(app);
         } else {
-            restore_or_place(&win, app);
-            let _ = win.show();
-            let _ = win.set_focus();
+            show_panel_window(app);
         }
     }
 }

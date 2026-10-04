@@ -5,7 +5,14 @@ import { LogicalSize, getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppStateView } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 import { getState } from "../api";
-import { keyGroupPanel, mergeMetrics, statusLabel, thresholdsFromSettings } from "../metrics";
+import {
+  changeLine,
+  keyGroupPanel,
+  mergeMetrics,
+  poolPanel,
+  statusLabel,
+  thresholdsFromSettings,
+} from "../metrics";
 import { formatUsdFixed } from "../utils";
 import { bindWindowDrag } from "../useWindowDrag";
 
@@ -28,6 +35,16 @@ const statusText = computed(() => statusLabel(m.value.tone));
 const showRows = computed(() => m.value.rows.length > 0);
 const isExpanded = computed(() => pinned.value || isHovered.value);
 const keys = computed(() => keyGroupPanel(state.value?.snapshots || []));
+const pools = computed(() => poolPanel(state.value?.snapshots || []));
+const deltaText = computed(() => changeLine(state.value?.snapshots || []));
+const updatedText = computed(() => {
+  const iso = state.value?.lastRefreshAt;
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const clock = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `更新于 ${clock}`;
+});
 
 async function syncChrome() {
   const el = pillRef.value;
@@ -87,6 +104,10 @@ watch(
     () => keys.value.notes.length,
     () => keys.value.more,
     () => keys.value.rows.map((row) => `${row.group}:${row.error ?? ""}`).join("|"),
+    () => pools.value.rows.map((row) => `${row.available}/${row.rateLimited}/${row.error}`).join("|"),
+    deltaText,
+    () => m.value.rows.map((row) => row.meta ?? "").join("|"),
+    updatedText,
   ],
   async () => {
     await nextTick();
@@ -131,6 +152,7 @@ onUnmounted(() => {
     <!-- Expanded Body Content (Auto height hugging) -->
     <div v-if="isExpanded" class="body">
       <p class="detail" :title="m.detail">{{ m.detail }}</p>
+      <p v-if="deltaText" class="delta" :title="deltaText">{{ deltaText }}</p>
 
       <div class="usage">
         <div class="stat">
@@ -162,6 +184,23 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <div v-if="pools.visible" class="keys">
+        <div class="keys-title">号池 · 正常/限流/异常</div>
+        <template v-for="row in pools.rows" :key="row.id">
+          <div v-if="row.site" class="key-site">{{ row.site }}</div>
+          <div class="key-row">
+            <span class="key-name" :title="row.name">{{ row.name }}</span>
+            <span class="pool-nums" title="正常 / 限流 / 异常">
+              <em class="ok">{{ row.available }}</em>
+              <em class="sep">/</em>
+              <em class="warn">{{ row.rateLimited }}</em>
+              <em class="sep">/</em>
+              <em class="bad">{{ row.error }}</em>
+            </span>
+          </div>
+        </template>
+      </div>
+
       <div v-if="keys.visible" class="keys">
         <div class="keys-title">密钥分组</div>
         <p v-for="note in keys.notes" :key="note" class="key-note">{{ note }}</p>
@@ -190,13 +229,14 @@ onUnmounted(() => {
               {{ formatUsdFixed(row.todayCost) }}
               · 本月 {{ formatUsdFixed(row.monthCost) }}
             </span>
+            <span v-if="row.meta" class="site-meta" :title="row.meta">{{ row.meta }}</span>
           </div>
           <span class="site-val">{{ row.value }}</span>
         </div>
       </div>
 
       <div class="foot">
-        <span>{{ m.footerLeft }}</span>
+        <span>{{ updatedText || m.footerLeft }}</span>
         <span>{{ pinned ? '已固定 · ' : '' }}{{ m.footerRight }}</span>
       </div>
     </div>
@@ -404,6 +444,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 7px;
+  max-height: 520px;
+  overflow-y: auto;
 }
 
 @keyframes fadeInBody {
@@ -417,7 +459,8 @@ onUnmounted(() => {
   }
 }
 
-.detail {
+.detail,
+.delta {
   margin: 0;
   font-size: 11px;
   font-weight: 500;
@@ -427,6 +470,11 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.delta {
+  color: #ffd60a;
+  font-variant-numeric: tabular-nums;
 }
 
 .usage,
@@ -535,11 +583,37 @@ onUnmounted(() => {
   max-width: 58%;
 }
 
+.pool-nums,
+.pool-nums em {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 650;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.pool-nums .bad {
+  color: #ff453a;
+}
+
+.pool-nums .warn {
+  color: #ff9f0a;
+}
+
+.pool-nums .ok {
+  color: #30d158;
+}
+
+.pool-nums .sep {
+  color: rgba(255, 255, 255, 0.35);
+  margin: 0 1px;
+}
+
 .sites {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 110px;
+  max-height: 168px;
   overflow-y: auto;
 }
 
@@ -562,13 +636,18 @@ onUnmounted(() => {
   min-width: 0;
 }
 
-.site-usage {
+.site-usage,
+.site-meta {
   font-size: 10px;
   font-weight: 500;
   color: rgba(255, 255, 255, 0.5);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.site-meta {
+  color: rgba(100, 210, 255, 0.88);
 }
 
 .site-name {

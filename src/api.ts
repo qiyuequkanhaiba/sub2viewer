@@ -31,6 +31,7 @@ export function updateSettings(input: {
   criticalHealthPct?: number;
   warnAvailableCount?: number;
   criticalAvailableCount?: number;
+  launchAtLogin?: boolean;
 }) {
   return invoke<void>("update_settings", { input });
 }

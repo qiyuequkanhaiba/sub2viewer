@@ -59,6 +59,9 @@ pub struct AppSettings {
     /// Critical when available accounts are at or below this count.
     #[serde(default = "default_critical_available")]
     pub critical_available_count: i64,
+    /// Start with the macOS session. Applied through the autostart plugin.
+    #[serde(default)]
+    pub launch_at_login: bool,
     #[serde(default)]
     pub sites: Vec<SiteConfig>,
     /// Last HUD position in logical pixels (so drag survives hide/show).
@@ -111,6 +114,7 @@ impl Default for AppSettings {
             critical_health_pct: default_critical_health(),
             warn_available_count: default_warn_available(),
             critical_available_count: default_critical_available(),
+            launch_at_login: false,
             sites: Vec::new(),
             panel_x: None,
             panel_y: None,
@@ -217,6 +221,29 @@ pub struct GroupHealth {
     pub error: i64,
 }
 
+/// A short, secret-free explanation of one unhealthy account.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountIssue {
+    pub name: String,
+    /// `error` or `rate_limited`.
+    pub kind: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// Change since the closest sample about an hour ago.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SiteDelta {
+    pub span_secs: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub balance: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub errors: Option<i64>,
+}
+
 /// An API key's current group. The key secret itself is never stored here.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -256,6 +283,9 @@ pub struct AdminSnapshot {
     pub rate_limited_accounts: i64,
     #[serde(default)]
     pub unschedulable_accounts: i64,
+    /// At most five error or rate-limited accounts. No secrets, emails, or addresses.
+    #[serde(default)]
+    pub issues: Vec<AccountIssue>,
     /// The logged-in admin's own API keys, without secrets.
     #[serde(default)]
     pub api_keys: Vec<ApiKeyBinding>,
@@ -287,6 +317,9 @@ pub struct SiteSnapshot {
     pub user: Option<UserSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub admin: Option<AdminSnapshot>,
+    /// Filled when the state view is built. Not stored on the polled snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta: Option<SiteDelta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -309,6 +342,7 @@ pub struct AppSettingsPublic {
     pub critical_health_pct: f64,
     pub warn_available_count: i64,
     pub critical_available_count: i64,
+    pub launch_at_login: bool,
     pub sites: Vec<SitePublic>,
 }
 
@@ -352,6 +386,8 @@ pub struct SettingsUpdate {
     pub warn_available_count: Option<i64>,
     #[serde(default)]
     pub critical_available_count: Option<i64>,
+    #[serde(default)]
+    pub launch_at_login: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

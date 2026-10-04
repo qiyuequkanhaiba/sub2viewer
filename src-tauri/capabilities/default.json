@@ -17,6 +17,10 @@
     "core:window:allow-start-dragging",
     "core:tray:default",
     "core:event:default",
-    "opener:default"
+    "opener:default",
+    "notification:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
   ]
 }

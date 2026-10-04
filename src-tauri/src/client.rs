@@ -1,12 +1,12 @@
 use crate::models::{
-    AdminSnapshot, ApiKeyBinding, BindableGroup, GroupHealth, RateLimitWindow, SubscriptionUsage,
-    UsageSummary, UserSnapshot,
+    AccountIssue, AdminSnapshot, ApiKeyBinding, BindableGroup, GroupHealth, RateLimitWindow,
+    SubscriptionUsage, UsageSummary, UserSnapshot,
 };
 use crate::store::Store;
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use reqwest::header::{HeaderMap, HeaderValue, CACHE_CONTROL, PRAGMA};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use url::form_urlencoded;
@@ -639,14 +639,16 @@ impl Sub2Client {
         let mut status_breakdown: HashMap<String, i64> = HashMap::new();
         let mut seen: HashMap<i64, ()> = HashMap::new();
 
-        let account_map = data.get("account").and_then(|v| v.as_object());
-        if account_map.is_none() || account_map.is_some_and(|m| m.is_empty()) {
-            return Err(ClientError::Message(
-                "availability has no unique account list".into(),
-            ));
-        }
+        let account_map = match data.get("account").and_then(|v| v.as_object()) {
+            Some(map) if !map.is_empty() => map,
+            _ => {
+                return Err(ClientError::Message(
+                    "availability has no unique account list".into(),
+                ))
+            }
+        };
 
-        for (k, v) in account_map.unwrap() {
+        for (k, v) in account_map {
             if !v.is_object() {
                 continue;
             }
@@ -675,6 +677,7 @@ impl Sub2Client {
         }
 
         groups.sort_by(|a, b| a.group_name.cmp(&b.group_name));
+        let issues = collect_ops_issues(account_map);
 
         Ok(AdminSnapshot {
             site_id: String::new(),
@@ -686,6 +689,7 @@ impl Sub2Client {
             error_accounts: errors,
             rate_limited_accounts: rate_limited,
             unschedulable_accounts: unschedulable,
+            issues,
             api_keys: Vec::new(),
             bindable_groups: Vec::new(),
             key_switch_supported: false,
@@ -853,6 +857,7 @@ impl Sub2Client {
         let mut groups: Vec<GroupHealth> = group_map.into_values().collect();
         groups.sort_by(|a, b| a.group_name.cmp(&b.group_name));
         let total = status_breakdown.values().sum::<i64>();
+        let issues = collect_fallback_issues(&items);
 
         Ok(AdminSnapshot {
             site_id: String::new(),
@@ -864,6 +869,7 @@ impl Sub2Client {
             error_accounts: errors,
             rate_limited_accounts: rate_limited,
             unschedulable_accounts: unschedulable,
+            issues,
             api_keys: Vec::new(),
             bindable_groups: Vec::new(),
             key_switch_supported: false,
@@ -1396,6 +1402,192 @@ fn resolve_key_group_names(keys: &mut [ApiKeyBinding], groups: &[BindableGroup])
     }
 }
 
+const MAX_ACCOUNT_ISSUES: usize = 5;
+
+fn collect_ops_issues(accounts: &serde_json::Map<String, Value>) -> Vec<AccountIssue> {
+    let mut seen = HashSet::new();
+    let mut issues = Vec::new();
+    for (key, value) in accounts {
+        if !value.is_object() {
+            continue;
+        }
+        let id = value
+            .get("account_id")
+            .and_then(|item| item.as_i64())
+            .or_else(|| key.parse().ok())
+            .unwrap_or(0);
+        if id <= 0 || !seen.insert(id) {
+            continue;
+        }
+        if let Some(issue) = issue_from_account(value, id, classify_ops_account(value)) {
+            issues.push(issue);
+        }
+    }
+    finish_issues(issues)
+}
+
+fn collect_fallback_issues(items: &[Value]) -> Vec<AccountIssue> {
+    let mut seen = HashSet::new();
+    let mut issues = Vec::new();
+    for value in items {
+        let id = value
+            .get("id")
+            .or_else(|| value.get("account_id"))
+            .and_then(|item| item.as_i64())
+            .unwrap_or(0);
+        if id <= 0 || !seen.insert(id) {
+            continue;
+        }
+        let class = classify_fallback_account(value);
+        if let Some(issue) = issue_from_account(value, id, class) {
+            issues.push(issue);
+        }
+    }
+    finish_issues(issues)
+}
+
+fn issue_from_account(value: &Value, id: i64, class: AccountClass) -> Option<AccountIssue> {
+    let kind = match class {
+        AccountClass::Error => "error",
+        AccountClass::RateLimited => "rate_limited",
+        _ => return None,
+    };
+    let detail = match class {
+        AccountClass::Error => value
+            .get("error_message")
+            .or_else(|| value.get("last_error"))
+            .and_then(|item| item.as_str())
+            .and_then(scrub_detail),
+        AccountClass::RateLimited => format_reset(value),
+        _ => None,
+    };
+    let status = value
+        .get("status")
+        .and_then(|item| item.as_str())
+        .unwrap_or(kind)
+        .to_string();
+    Some(AccountIssue {
+        name: account_label(value, id),
+        kind: kind.into(),
+        status,
+        detail,
+    })
+}
+
+fn finish_issues(mut issues: Vec<AccountIssue>) -> Vec<AccountIssue> {
+    issues.sort_by(|a, b| {
+        let rank = |kind: &str| if kind == "error" { 0 } else { 1 };
+        rank(&a.kind)
+            .cmp(&rank(&b.kind))
+            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    issues.truncate(MAX_ACCOUNT_ISSUES);
+    issues
+}
+
+fn account_label(value: &Value, id: i64) -> String {
+    let name = value
+        .get("account_name")
+        .or_else(|| value.get("name"))
+        .and_then(|item| item.as_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    match name {
+        Some(name) => truncate_chars(name, 40),
+        None => format!("账号 #{id}"),
+    }
+}
+
+fn format_reset(value: &Value) -> Option<String> {
+    if let Some(seconds) = value
+        .get("rate_limit_remaining_sec")
+        .and_then(|item| item.as_i64())
+    {
+        return Some(format_remaining(seconds));
+    }
+    let raw = value
+        .get("rate_limit_reset_at")
+        .and_then(|item| item.as_str())?;
+    let parsed = DateTime::parse_from_rfc3339(raw).ok()?;
+    Some(
+        parsed
+            .with_timezone(&Local)
+            .format("%m-%d %H:%M 解除")
+            .to_string(),
+    )
+}
+
+fn format_remaining(seconds: i64) -> String {
+    if seconds <= 0 {
+        return "即将解除".into();
+    }
+    if seconds < 60 {
+        return format!("剩余 {seconds}秒");
+    }
+    if seconds < 3600 {
+        return format!("剩余 {}分", (seconds + 59) / 60);
+    }
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    if minutes == 0 {
+        format!("剩余 {hours}小时")
+    } else {
+        format!("剩余 {hours}小时{minutes}分")
+    }
+}
+
+fn scrub_detail(raw: &str) -> Option<String> {
+    let mut cleaned = String::new();
+    for token in raw.split_whitespace() {
+        let lower = token.to_ascii_lowercase();
+        if lower.starts_with("sk-")
+            || lower.starts_with("bearer")
+            || token.contains('@')
+            || token.contains("://")
+        {
+            continue;
+        }
+        let token = token.trim_matches(|c: char| matches!(c, '"' | '\'' | ',' | ';' | '。'));
+        if token.is_empty() {
+            continue;
+        }
+        if !cleaned.is_empty() {
+            cleaned.push(' ');
+        }
+        cleaned.push_str(token);
+    }
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(truncate_chars(cleaned, 72))
+    }
+}
+
+fn classify_fallback_account(value: &Value) -> AccountClass {
+    let status = value
+        .get("status")
+        .and_then(|item| item.as_str())
+        .unwrap_or("");
+    let schedulable = value
+        .get("schedulable")
+        .and_then(|item| item.as_bool())
+        .unwrap_or(true);
+    let rate_limited = value
+        .get("rate_limit_reset_at")
+        .and_then(|item| item.as_str())
+        .is_some();
+    if status == "error" {
+        AccountClass::Error
+    } else if rate_limited {
+        AccountClass::RateLimited
+    } else if status == "active" && schedulable {
+        AccountClass::Available
+    } else {
+        AccountClass::Unschedulable
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum AccountClass {
     Available,
@@ -1478,6 +1670,7 @@ fn error_admin(site_id: &str, msg: String) -> AdminSnapshot {
         error_accounts: 0,
         rate_limited_accounts: 0,
         unschedulable_accounts: 0,
+        issues: Vec::new(),
         api_keys: Vec::new(),
         bindable_groups: Vec::new(),
         key_switch_supported: false,
@@ -1971,6 +2164,64 @@ mod tests {
         let today_s = today.format("%Y-%m-%d").to_string();
         let (_t, month) = sum_daily_usage_on(&body, &today_s, &month_prefix);
         assert_eq!(month, Some(1.0));
+    }
+
+    #[test]
+    fn ops_issues_prefer_errors_and_drop_secrets() {
+        let accounts = json!({
+            "1": {
+                "account_id": 1,
+                "account_name": "alpha",
+                "status": "error",
+                "has_error": true,
+                "error_message": "upstream sk-secret-value owner@example.com rejected"
+            },
+            "2": {
+                "account_id": 2,
+                "account_name": "beta",
+                "status": "active",
+                "is_rate_limited": true,
+                "rate_limit_remaining_sec": 125
+            },
+            "3": {
+                "account_id": 3,
+                "account_name": "gamma",
+                "status": "active",
+                "is_available": true
+            },
+            "4": { "account_id": 4, "status": "error", "has_error": true },
+            "5": { "account_id": 5, "status": "error", "has_error": true, "account_name": "delta" },
+            "6": { "account_id": 6, "status": "error", "has_error": true, "account_name": "epsilon" },
+            "7": { "account_id": 7, "status": "error", "has_error": true, "account_name": "zeta" }
+        });
+        let issues = collect_ops_issues(accounts.as_object().unwrap());
+        assert_eq!(issues.len(), 5);
+        assert!(issues
+            .iter()
+            .all(|issue| issue.kind == "error" || issue.name == "beta"));
+        assert_eq!(issues[0].kind, "error");
+        let alpha = issues.iter().find(|issue| issue.name == "alpha").unwrap();
+        let detail = alpha.detail.as_deref().unwrap();
+        assert!(detail.contains("rejected"));
+        assert!(!detail.contains("sk-"));
+        assert!(!detail.contains('@'));
+        assert!(issues.iter().all(|issue| issue.name != "gamma"));
+    }
+
+    #[test]
+    fn fallback_issue_uses_reset_time_and_name() {
+        let items = vec![json!({
+            "id": 9,
+            "name": "team-1",
+            "status": "active",
+            "schedulable": true,
+            "rate_limit_reset_at": "2026-10-04T02:30:00Z"
+        })];
+        let issues = collect_fallback_issues(&items);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].name, "team-1");
+        assert_eq!(issues[0].kind, "rate_limited");
+        assert!(issues[0].detail.as_deref().unwrap().contains("解除"));
     }
 
     #[test]
