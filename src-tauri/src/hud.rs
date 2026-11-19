@@ -71,11 +71,84 @@ unsafe fn island_nswindow(ptr: *mut std::ffi::c_void) {
         return;
     }
     let win = ptr as *mut AnyObject;
+    // A plain NSWindow never joins a fullscreen Space, however high its
+    // level: the island must actually be a non-activating NSPanel. Tauri
+    // has no NSPanel support, so swap the instance's class at the ObjC
+    // runtime (identity, webview subviews and tao's delegate all stay
+    // valid). Do this while the window is still hidden (setup time).
+    convert_to_nonactivating_panel(win);
     // NSWindow.Level.mainMenu is 24; boring.notch floats at +3 above it.
     let _: () = msg_send![win, setLevel: 27i64];
-    // fullScreenAuxiliary (1<<8) | stationary (1<<4)
-    // | canJoinAllSpaces (1<<0) | ignoresCycle (1<<6) = 0x151 = 337
+    // canJoinAllSpaces (1<<0) | stationary (1<<4) | fullScreenAuxiliary (1<<6)
+    // | ignoresCycle (1<<8) = 337
     let _: () = msg_send![win, setCollectionBehavior: 337u64];
+}
+
+/// The island's panel class: an `NSPanel` that can never become key or
+/// main, so showing, hovering or clicking it never activates this app or
+/// moves focus away from the user's current app.
+#[cfg(target_os = "macos")]
+use objc2::ClassType;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::NSPanel;
+
+#[cfg(target_os = "macos")]
+objc2::define_class!(
+    #[unsafe(super(NSPanel))]
+    #[name = "Sub2ViewerIslandPanel"]
+    struct IslandPanel;
+
+    impl IslandPanel {
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn refuse_key(&self) -> objc2::runtime::Bool {
+            objc2::runtime::Bool::NO
+        }
+
+        #[unsafe(method(canBecomeMainWindow))]
+        fn refuse_main(&self) -> objc2::runtime::Bool {
+            objc2::runtime::Bool::NO
+        }
+    }
+);
+
+/// Convert the tao-created window into a non-activating `NSPanel`.
+///
+/// Two independent things are required for the window to float over
+/// fullscreen Spaces (verified empirically): the object must BE an
+/// `NSPanel`, and the WindowServer must tag it as activation-preventing.
+/// A runtime class swap skips `NSPanel`'s designated initializer, and
+/// `setStyleMask:` alone does not synchronize the WindowServer-side
+/// activation-prevention tag, so the private `_setPreventsActivation:`
+/// (guarded with `respondsToSelector`) completes the conversion.
+#[cfg(target_os = "macos")]
+unsafe fn convert_to_nonactivating_panel(win: *mut objc2::runtime::AnyObject) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
+
+    extern "C" {
+        fn object_setClass(
+            object: *mut objc2::runtime::AnyObject,
+            cls: *const AnyClass,
+        ) -> *const AnyClass;
+    }
+
+    object_setClass(win, IslandPanel::class());
+
+    // tao owns the window and releases it on close; AppKit must not also.
+    let _: () = msg_send![win, setReleasedWhenClosed: false];
+    // Panels hide when their app deactivates by default; the island must
+    // stay visible over other apps and fullscreen Spaces.
+    let _: () = msg_send![win, setHidesOnDeactivate: false];
+    // NSWindowStyleMask.nonactivatingPanel = 1<<7; tao created the window
+    // borderless, so OR-ing the bit in preserves any other bits.
+    let mask: u64 = msg_send![win, styleMask];
+    let _: () = msg_send![win, setStyleMask: (mask | 128u64)];
+    // Synchronize the WindowServer's activation-prevention tag (private
+    // API; absent on some macOS versions, so guard the call).
+    let responds: bool = msg_send![win, respondsToSelector: objc2::sel!(_setPreventsActivation:)];
+    if responds {
+        let _: () = msg_send![win, _setPreventsActivation: true];
+    }
 }
 
 /// Notch size of the main screen. Width follows boring.notch's formula:
@@ -106,10 +179,14 @@ unsafe fn macos_notch_geometry() -> Option<NotchGeometry> {
     let insets: NSEdgeInsets = msg_send![screen, safeAreaInsets];
     let has_notch = insets.top > 0.0;
 
-    let left: *mut NSRect = msg_send![screen, auxiliaryTopLeftArea];
-    let right: *mut NSRect = msg_send![screen, auxiliaryTopRightArea];
-    let width = if !left.is_null() && !right.is_null() {
-        frame.size.width - (*left).size.width - (*right).size.width + 4.0
+    // These properties return NSRect structs by value (same ABI as
+    // `frame`), so they must be declared as struct returns — a `*mut
+    // NSRect` declaration reads the indirect-result ABI wrong and
+    // dereferences garbage. A no-notch screen reports a zero rect.
+    let left: NSRect = msg_send![screen, auxiliaryTopLeftArea];
+    let right: NSRect = msg_send![screen, auxiliaryTopRightArea];
+    let width = if left.size.width > 0.0 && right.size.width > 0.0 {
+        frame.size.width - left.size.width - right.size.width + 4.0
     } else {
         FALLBACK_GEOMETRY.width
     };
