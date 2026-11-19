@@ -10,11 +10,10 @@ mod tray;
 
 use state::{spawn_poller, AppState};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tauri::{
     image::Image,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, Position, WindowEvent,
+    Manager, Position,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -109,33 +108,18 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Floating HUD: start hidden; remember drag position.
+            // Floating HUD: start hidden. The island is anchored to
+            // the notch, so window positions are not persisted: the
+            // pre-island Moved handler saved every drag/programmatic
+            // move to settings.panel_x/panel_y and restore_or_place
+            // put the window back there, which on machines with a
+            // saved tray-panel position left the island hanging below
+            // the menu bar instead of on the notch.
             hud::apply_clear(app.handle());
             hud::apply_island_window(app.handle());
             hud::spawn_click_through_guard(app.handle().clone());
             if let Some(panel) = app.get_webview_window("panel") {
                 let _ = panel.hide();
-                let st = state.clone();
-                let win = panel.clone();
-                let last_save = std::sync::Mutex::new(Instant::now() - Duration::from_secs(1));
-                panel.on_window_event(move |event| {
-                    if let WindowEvent::Moved(pos) = event {
-                        let now = Instant::now();
-                        if let Ok(mut t) = last_save.lock() {
-                            if now.duration_since(*t) < Duration::from_millis(200) {
-                                return;
-                            }
-                            *t = now;
-                        }
-                        let scale = win.scale_factor().unwrap_or(1.0);
-                        let x = pos.x as f64 / scale;
-                        let y = pos.y as f64 / scale;
-                        let st = st.clone();
-                        tauri::async_runtime::spawn(async move {
-                            st.save_panel_position(x, y).await;
-                        });
-                    }
-                });
             }
 
             let launch_app = app.handle().clone();
@@ -198,22 +182,13 @@ fn toggle_panel_window(app: &tauri::AppHandle) {
     }
 }
 
-fn restore_or_place(win: &tauri::WebviewWindow, app: &tauri::AppHandle) {
-    let state = app.state::<Arc<AppState>>();
-    let st = state.inner().clone();
-    let win = win.clone();
-    tauri::async_runtime::spawn(async move {
-        let (x, y) = {
-            let s = st.settings.read().await;
-            (s.panel_x, s.panel_y)
-        };
-        match (x, y) {
-            (Some(x), Some(y)) => {
-                let _ = win.set_position(Position::Logical(tauri::LogicalPosition { x, y }));
-            }
-            _ => position_at_notch(&win),
-        }
-    });
+fn restore_or_place(win: &tauri::WebviewWindow, _app: &tauri::AppHandle) {
+    // The island is anchored to the notch by design: always place it
+    // there. A saved panel_x/panel_y (left over from the pre-island
+    // tray panel, or from a drag) would leave it hanging below the
+    // menu bar, off-notch, so the saved position is never restored
+    // for this window and is no longer written either (see setup).
+    position_at_notch(win);
 }
 
 fn position_at_notch(win: &tauri::WebviewWindow) {
