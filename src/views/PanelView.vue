@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { listen } from "@tauri-apps/api/event";
-import { LogicalSize, getCurrentWindow } from "@tauri-apps/api/window";
-import type { AppStateView } from "../types";
-import { invoke } from "@tauri-apps/api/core";
-import { getState } from "../api";
+import type { AppStateView, NotchGeometry } from "../types";
+import { getNotchGeometry, getState, setPillRect } from "../api";
 import {
   changeLine,
   keyGroupPanel,
@@ -18,11 +16,22 @@ import { bindWindowDrag } from "../useWindowDrag";
 
 const state = ref<AppStateView | null>(null);
 const pillRef = ref<HTMLElement | null>(null);
+const leadRef = ref<HTMLElement | null>(null);
+const chipRef = ref<HTMLElement | null>(null);
 const pinned = ref(false);
-const isHovered = ref(false);
+const hoverIntent = ref(false);
+const peeking = ref(false);
+const geometry = ref<NotchGeometry>({
+  hasNotch: false,
+  width: 185,
+  height: 32,
+});
 let unlistenState: (() => void) | undefined;
+let unlistenPeek: (() => void) | undefined;
 let unbindDrag: (() => void) | undefined;
-let ro: ResizeObserver | undefined;
+let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+let leaveTimer: ReturnType<typeof setTimeout> | undefined;
+let peekTimer: ReturnType<typeof setTimeout> | undefined;
 
 const m = computed(() =>
   mergeMetrics(
@@ -33,7 +42,9 @@ const m = computed(() =>
 
 const statusText = computed(() => statusLabel(m.value.tone));
 const showRows = computed(() => m.value.rows.length > 0);
-const isExpanded = computed(() => pinned.value || isHovered.value);
+const isExpanded = computed(
+  () => pinned.value || hoverIntent.value || peeking.value,
+);
 const keys = computed(() => keyGroupPanel(state.value?.snapshots || []));
 const pools = computed(() => poolPanel(state.value?.snapshots || []));
 const deltaText = computed(() => changeLine(state.value?.snapshots || []));
@@ -46,18 +57,129 @@ const updatedText = computed(() => {
   return `更新于 ${clock}`;
 });
 
-async function syncChrome() {
+// --- Island sizing -------------------------------------------------------
+// The window is fixed-size; the capsule morphs inside it, driven by a
+// JS spring integrator using boring.notch's parameters converted to
+// stiffness/damping: open k=224 c=23.9 (slight overshoot), close
+// k=195 c=27.9 (critically damped), content resize k=273 c=26.4.
+interface Spring {
+  k: number;
+  c: number;
+}
+const SPRING_OPEN: Spring = { k: 224, c: 23.9 };
+const SPRING_CLOSE: Spring = { k: 195, c: 27.9 };
+const SPRING_INTERACTIVE: Spring = { k: 273, c: 26.4 };
+const EXPANDED_WIDTH = 290;
+
+let curW = 0;
+let curH = 0;
+let anim: {
+  raf: number;
+  last: number;
+  tw: number;
+  th: number;
+  vw: number;
+  vh: number;
+  spring: Spring;
+} | null = null;
+let lastRect = { x: -1, w: -1, h: -1 };
+
+function collapsedSize() {
+  const h = geometry.value.hasNotch ? geometry.value.height : 36;
+  let w = 168;
+  if (leadRef.value && chipRef.value) {
+    // lead content + status chip + head gap + pill horizontal padding/border
+    w = leadRef.value.scrollWidth + chipRef.value.offsetWidth + 8 + 22 + 2;
+  }
+  if (geometry.value.hasNotch) {
+    w = Math.max(w, geometry.value.width + 4);
+  }
+  return { w: Math.ceil(w), h };
+}
+
+function expandedSize() {
+  const el = pillRef.value;
+  if (!el) return { w: EXPANDED_WIDTH, h: 300 };
+  // scrollHeight is the full content height even while the pill is
+  // clipped mid-animation (overflow: hidden).
+  return { w: EXPANDED_WIDTH, h: Math.ceil(el.scrollHeight) };
+}
+
+function applySize() {
   const el = pillRef.value;
   if (!el) return;
-  const r = el.getBoundingClientRect();
-  const radius = isExpanded.value ? 18 : 18;
-  try {
-    await getCurrentWindow().setSize(
-      new LogicalSize(Math.ceil(r.width), Math.ceil(r.height)),
-    );
-    await invoke("set_hud_radius", { radius });
-  } catch {
-    // ignore
+  el.style.width = `${curW}px`;
+  el.style.height = `${curH}px`;
+  // Keep the Rust click-through guard in sync with the visible capsule.
+  const x = Math.round((window.innerWidth - curW) / 2);
+  const w = Math.round(curW);
+  const h = Math.round(curH);
+  if (
+    Math.abs(x - lastRect.x) >= 1 ||
+    Math.abs(w - lastRect.w) >= 1 ||
+    Math.abs(h - lastRect.h) >= 1
+  ) {
+    lastRect = { x, w, h };
+    void setPillRect(x, 0, w, h).catch(() => {});
+  }
+}
+
+function animateTo(tw: number, th: number, spring: Spring) {
+  if (!pillRef.value) return;
+  if (anim) {
+    anim.tw = tw;
+    anim.th = th;
+    anim.spring = spring;
+    return;
+  }
+  const run = {
+    raf: 0,
+    last: performance.now(),
+    tw,
+    th,
+    vw: 0,
+    vh: 0,
+    spring,
+  };
+  anim = run;
+  const tick = (now: number) => {
+    if (anim !== run) return;
+    const dt = Math.min((now - run.last) / 1000, 0.05);
+    run.last = now;
+    const steps = 4;
+    const step = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      run.vw += (-run.spring.k * (curW - run.tw) - run.spring.c * run.vw) * step;
+      curW += run.vw * step;
+      run.vh += (-run.spring.k * (curH - run.th) - run.spring.c * run.vh) * step;
+      curH += run.vh * step;
+    }
+    applySize();
+    const settled =
+      Math.abs(curW - run.tw) < 0.5 &&
+      Math.abs(run.vw) < 5 &&
+      Math.abs(curH - run.th) < 0.5 &&
+      Math.abs(run.vh) < 5;
+    if (settled) {
+      curW = run.tw;
+      curH = run.th;
+      applySize();
+      anim = null;
+      return;
+    }
+    run.raf = requestAnimationFrame(tick);
+  };
+  run.raf = requestAnimationFrame(tick);
+}
+
+function retarget(mode: "toggle" | "content") {
+  if (!pillRef.value) return;
+  if (isExpanded.value) {
+    const t = expandedSize();
+    animateTo(t.w, t.h, mode === "toggle" ? SPRING_OPEN : SPRING_INTERACTIVE);
+  } else {
+    const t = collapsedSize();
+    animateTo(t.w, t.h, mode === "toggle" ? SPRING_CLOSE : SPRING_INTERACTIVE);
   }
 }
 
@@ -69,33 +191,70 @@ async function load() {
   }
 }
 
+// Hover follows boring.notch's timing: only expand after the cursor has
+// rested 300ms (intent), collapse 100ms after it leaves (debounce).
 function handleMouseEnter() {
-  isHovered.value = true;
+  if (leaveTimer) {
+    clearTimeout(leaveTimer);
+    leaveTimer = undefined;
+  }
+  if (hoverTimer) clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(() => {
+    hoverIntent.value = true;
+  }, 300);
 }
 
 function handleMouseLeave() {
-  isHovered.value = false;
+  if (hoverTimer) {
+    clearTimeout(hoverTimer);
+    hoverTimer = undefined;
+  }
+  if (leaveTimer) clearTimeout(leaveTimer);
+  leaveTimer = setTimeout(() => {
+    hoverIntent.value = false;
+  }, 100);
 }
 
 onMounted(async () => {
   document.documentElement.classList.add("panel-mode");
   document.body.classList.add("panel-mode");
+  try {
+    geometry.value = await getNotchGeometry();
+  } catch {
+    // keep the fallback geometry
+  }
   await load();
   unlistenState = await listen<AppStateView>("state-updated", (e) => {
     state.value = e.payload;
   });
+  unlistenPeek = await listen<string>("alert-peek", () => {
+    peeking.value = true;
+    if (peekTimer) clearTimeout(peekTimer);
+    peekTimer = setTimeout(() => {
+      peeking.value = false;
+    }, 4000);
+  });
   await nextTick();
   if (pillRef.value) {
     unbindDrag = bindWindowDrag(pillRef.value);
-    ro = new ResizeObserver(() => void syncChrome());
-    ro.observe(pillRef.value);
-    await syncChrome();
+    pillRef.value.style.setProperty(
+      "--headh",
+      `${geometry.value.hasNotch ? geometry.value.height : 36}px`,
+    );
+    const t = collapsedSize();
+    curW = t.w;
+    curH = t.h;
+    applySize();
   }
+});
+
+watch(isExpanded, async () => {
+  await nextTick();
+  retarget("toggle");
 });
 
 watch(
   [
-    isExpanded,
     () => m.value.rows.length,
     () => m.value.hero,
     () => m.value.okAccounts,
@@ -111,7 +270,7 @@ watch(
   ],
   async () => {
     await nextTick();
-    await syncChrome();
+    retarget("content");
   },
 );
 
@@ -119,136 +278,148 @@ onUnmounted(() => {
   document.documentElement.classList.remove("panel-mode");
   document.body.classList.remove("panel-mode");
   unlistenState?.();
+  unlistenPeek?.();
   unbindDrag?.();
-  ro?.disconnect();
+  if (hoverTimer) clearTimeout(hoverTimer);
+  if (leaveTimer) clearTimeout(leaveTimer);
+  if (peekTimer) clearTimeout(peekTimer);
+  if (anim) cancelAnimationFrame(anim.raf);
+  anim = null;
 });
 </script>
 
 <template>
-  <div
-    ref="pillRef"
-    class="pill"
-    :class="[m.tone, { expanded: isExpanded }]"
-    @mouseenter="handleMouseEnter"
-    @mouseleave="handleMouseLeave"
-    @dblclick.stop="pinned = !pinned"
-  >
-    <!-- Top Capsule Bar -->
-    <div class="head">
-      <div class="lead">
-        <div class="dot" :class="{ pulse: m.tone === 'ok' }" />
-        <span v-if="m.heroBalance" class="hero money">{{ m.heroBalance }}</span>
-        <span v-if="m.heroBalance && m.heroAccounts" class="sep">·</span>
-        <span
-          v-if="m.heroAccounts"
-          class="hero accounts"
-          title="正常 / 错误 / 总量"
-        >{{ m.heroAccounts }}</span>
-        <span v-if="!m.heroBalance && !m.heroAccounts" class="hero">{{ m.hero }}</span>
-      </div>
-      <span class="status-chip">{{ statusText }}</span>
-    </div>
-
-    <!-- Expanded Body Content (Auto height hugging) -->
-    <div v-if="isExpanded" class="body">
-      <p class="detail" :title="m.detail">{{ m.detail }}</p>
-      <p v-if="deltaText" class="delta" :title="deltaText">{{ deltaText }}</p>
-
-      <div class="usage">
-        <div class="stat">
-          <span class="k">{{ m.usageScope === "user" && m.hasAdmin ? "个人今日" : "今日消耗" }}</span>
-          <span class="v">{{ formatUsdFixed(m.todayCost) }}</span>
+  <div class="island-root">
+    <div
+      ref="pillRef"
+      class="pill"
+      :class="[m.tone, { expanded: isExpanded }]"
+      @mouseenter="handleMouseEnter"
+      @mouseleave="handleMouseLeave"
+      @dblclick.stop="pinned = !pinned"
+    >
+      <!-- Top Capsule Bar -->
+      <div class="head">
+        <div ref="leadRef" class="lead">
+          <div class="dot" :class="{ pulse: m.tone === 'ok' }" />
+          <span v-if="m.heroBalance" class="hero money">{{ m.heroBalance }}</span>
+          <span v-if="m.heroBalance && m.heroAccounts" class="sep">·</span>
+          <span
+            v-if="m.heroAccounts"
+            class="hero accounts"
+            title="正常 / 错误 / 总量"
+          >{{ m.heroAccounts }}</span>
+          <span v-if="!m.heroBalance && !m.heroAccounts" class="hero">{{ m.hero }}</span>
         </div>
-        <div class="stat">
-          <span class="k">{{ m.usageScope === "user" && m.hasAdmin ? "个人本月" : "本月累计" }}</span>
-          <span class="v">{{ formatUsdFixed(m.monthCost) }}</span>
-        </div>
+        <span ref="chipRef" class="status-chip">{{ statusText }}</span>
       </div>
 
-      <div v-if="m.hasAdmin && m.totalAccounts" class="health">
-        <div class="stat ok">
-          <span class="k">正常</span>
-          <span class="v">{{ m.okAccounts }}</span>
-        </div>
-        <div class="stat bad">
-          <span class="k">错误</span>
-          <span class="v">{{ m.errorAccounts }}</span>
-        </div>
-        <div class="stat warn">
-          <span class="k">限流</span>
-          <span class="v">{{ m.rateLimitedAccounts }}</span>
-        </div>
-        <div class="stat dim">
-          <span class="k">不可调度</span>
-          <span class="v">{{ m.unschedulableAccounts }}</span>
-        </div>
-      </div>
+      <!-- Expanded Body Content -->
+      <div v-if="isExpanded" class="body">
+        <p class="detail" :title="m.detail">{{ m.detail }}</p>
+        <p v-if="deltaText" class="delta" :title="deltaText">{{ deltaText }}</p>
 
-      <div v-if="pools.visible" class="keys">
-        <div class="keys-title">号池 · 正常/限流/异常</div>
-        <template v-for="row in pools.rows" :key="row.id">
-          <div v-if="row.site" class="key-site">{{ row.site }}</div>
-          <div class="key-row">
-            <span class="key-name" :title="row.name">{{ row.name }}</span>
-            <span class="pool-nums" title="正常 / 限流 / 异常">
-              <em class="ok">{{ row.available }}</em>
-              <em class="sep">/</em>
-              <em class="warn">{{ row.rateLimited }}</em>
-              <em class="sep">/</em>
-              <em class="bad">{{ row.error }}</em>
-            </span>
+        <div class="usage">
+          <div class="stat">
+            <span class="k">{{ m.usageScope === "user" && m.hasAdmin ? "个人今日" : "今日消耗" }}</span>
+            <span class="v">{{ formatUsdFixed(m.todayCost) }}</span>
           </div>
-        </template>
-      </div>
-
-      <div v-if="keys.visible" class="keys">
-        <div class="keys-title">密钥分组</div>
-        <p v-for="note in keys.notes" :key="note" class="key-note">{{ note }}</p>
-        <template v-for="row in keys.rows" :key="row.id">
-          <div v-if="row.site" class="key-site">{{ row.site }}</div>
-          <div class="key-row">
-            <span class="key-name" :title="row.name">{{ row.name }}</span>
-            <span class="key-group" :title="row.group">{{ row.group }}</span>
+          <div class="stat">
+            <span class="k">{{ m.usageScope === "user" && m.hasAdmin ? "个人本月" : "本月累计" }}</span>
+            <span class="v">{{ formatUsdFixed(m.monthCost) }}</span>
           </div>
-          <p v-if="row.error" class="key-err">{{ row.error }}</p>
-        </template>
-        <p v-if="keys.more" class="key-note">其余 {{ keys.more }} 个</p>
-      </div>
-
-      <div v-if="showRows" class="sites">
-        <div
-          v-for="row in m.rows"
-          :key="row.name"
-          class="site"
-          :class="row.tone"
-        >
-          <div class="site-info">
-            <span class="site-name" :title="row.name">{{ row.name }}</span>
-            <span class="site-usage">
-              {{ row.kind === "admin" ? "平台" : "今日" }}
-              {{ formatUsdFixed(row.todayCost) }}
-              · 本月 {{ formatUsdFixed(row.monthCost) }}
-            </span>
-            <span v-if="row.meta" class="site-meta" :title="row.meta">{{ row.meta }}</span>
-          </div>
-          <span class="site-val">{{ row.value }}</span>
         </div>
-      </div>
 
-      <div class="foot">
-        <span>{{ updatedText || m.footerLeft }}</span>
-        <span>{{ pinned ? '已固定 · ' : '' }}{{ m.footerRight }}</span>
+        <div v-if="m.hasAdmin && m.totalAccounts" class="health">
+          <div class="stat ok">
+            <span class="k">正常</span>
+            <span class="v">{{ m.okAccounts }}</span>
+          </div>
+          <div class="stat bad">
+            <span class="k">错误</span>
+            <span class="v">{{ m.errorAccounts }}</span>
+          </div>
+          <div class="stat warn">
+            <span class="k">限流</span>
+            <span class="v">{{ m.rateLimitedAccounts }}</span>
+          </div>
+          <div class="stat dim">
+            <span class="k">不可调度</span>
+            <span class="v">{{ m.unschedulableAccounts }}</span>
+          </div>
+        </div>
+
+        <div v-if="pools.visible" class="keys">
+          <div class="keys-title">号池 · 正常/限流/异常</div>
+          <template v-for="row in pools.rows" :key="row.id">
+            <div v-if="row.site" class="key-site">{{ row.site }}</div>
+            <div class="key-row">
+              <span class="key-name" :title="row.name">{{ row.name }}</span>
+              <span class="pool-nums" title="正常 / 限流 / 异常">
+                <em class="ok">{{ row.available }}</em>
+                <em class="sep">/</em>
+                <em class="warn">{{ row.rateLimited }}</em>
+                <em class="sep">/</em>
+                <em class="bad">{{ row.error }}</em>
+              </span>
+            </div>
+          </template>
+        </div>
+
+        <div v-if="keys.visible" class="keys">
+          <div class="keys-title">密钥分组</div>
+          <p v-for="note in keys.notes" :key="note" class="key-note">{{ note }}</p>
+          <template v-for="row in keys.rows" :key="row.id">
+            <div v-if="row.site" class="key-site">{{ row.site }}</div>
+            <div class="key-row">
+              <span class="key-name" :title="row.name">{{ row.name }}</span>
+              <span class="key-group" :title="row.group">{{ row.group }}</span>
+            </div>
+            <p v-if="row.error" class="key-err">{{ row.error }}</p>
+          </template>
+          <p v-if="keys.more" class="key-note">其余 {{ keys.more }} 个</p>
+        </div>
+
+        <div v-if="showRows" class="sites">
+          <div
+            v-for="row in m.rows"
+            :key="row.name"
+            class="site"
+            :class="row.tone"
+          >
+            <div class="site-info">
+              <span class="site-name" :title="row.name">{{ row.name }}</span>
+              <span class="site-usage">
+                {{ row.kind === "admin" ? "平台" : "今日" }}
+                {{ formatUsdFixed(row.todayCost) }}
+                · 本月 {{ formatUsdFixed(row.monthCost) }}
+              </span>
+              <span v-if="row.meta" class="site-meta" :title="row.meta">{{ row.meta }}</span>
+            </div>
+            <span class="site-val">{{ row.value }}</span>
+          </div>
+        </div>
+
+        <div class="foot">
+          <span>{{ updatedText || m.footerLeft }}</span>
+          <span>{{ pinned ? '已固定 · ' : '' }}{{ m.footerRight }}</span>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
+.island-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
 .pill {
   box-sizing: border-box;
-  width: max-content;
-  max-width: 320px;
-  height: 36px;
   padding: 0 11px;
   margin: 0;
   background:
@@ -257,8 +428,9 @@ onUnmounted(() => {
   backdrop-filter: blur(28px) saturate(200%);
   -webkit-backdrop-filter: blur(28px) saturate(200%);
   border: 1px solid rgba(255, 255, 255, 0.35);
-  border-top: 1px solid rgba(255, 255, 255, 0.7);
-  border-radius: 18px;
+  border-top: none;
+  /* Top-attached island corners (boring.notch): small on top, large below. */
+  border-radius: 6px 6px 14px 14px;
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.4);
   color: #ffffff;
   overflow: hidden;
@@ -274,12 +446,12 @@ onUnmounted(() => {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   transition:
-    width 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    border-radius 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    border-radius 0.32s cubic-bezier(0.16, 1, 0.3, 1),
     background 0.28s cubic-bezier(0.16, 1, 0.3, 1),
     box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1);
-  display: inline-flex;
+  display: flex;
   flex-direction: column;
+  flex-shrink: 0;
 }
 
 .pill:active {
@@ -292,7 +464,6 @@ onUnmounted(() => {
     linear-gradient(180deg, rgba(255, 159, 10, 0.28), rgba(255, 255, 255, 0.12)),
     rgba(35, 24, 15, 0.5);
   border-color: rgba(255, 159, 10, 0.45);
-  border-top-color: rgba(255, 214, 10, 0.75);
 }
 
 .pill.bad {
@@ -300,7 +471,6 @@ onUnmounted(() => {
     linear-gradient(180deg, rgba(255, 69, 58, 0.28), rgba(255, 255, 255, 0.12)),
     rgba(35, 15, 18, 0.5);
   border-color: rgba(255, 69, 58, 0.45);
-  border-top-color: rgba(255, 105, 97, 0.75);
 }
 
 .pill.muted {
@@ -309,12 +479,9 @@ onUnmounted(() => {
     rgba(25, 25, 30, 0.4);
 }
 
-/* Expanded State: Hugs content automatically without empty space */
+/* Expanded State: size itself is driven by the JS spring. */
 .pill.expanded {
-  width: 290px;
-  height: auto;
-  min-height: 36px;
-  border-radius: 18px;
+  border-radius: 19px 19px 24px 24px;
   padding: 8px 13px 11px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.14)),
@@ -326,7 +493,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 36px;
+  height: var(--headh, 36px);
   flex-shrink: 0;
 }
 
@@ -439,7 +606,7 @@ onUnmounted(() => {
 }
 
 .body {
-  animation: fadeInBody 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: fadeInBody 0.25s cubic-bezier(0.16, 1, 0.3, 1) 0.12s both;
   margin-top: 7px;
   display: flex;
   flex-direction: column;

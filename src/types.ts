@@ -1,5 +1,11 @@
 export type SiteRole = "user" | "admin";
 
+export interface NotchGeometry {
+  hasNotch: boolean;
+  width: number;
+  height: number;
+}
+
 export interface SitePublic {
   id: string;
   name: string;

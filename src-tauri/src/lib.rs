@@ -74,7 +74,7 @@ pub fn run() {
                             tauri::async_runtime::spawn(async move {
                                 st.clear_panel_position().await;
                                 if let Some(win) = app2.get_webview_window("panel") {
-                                    position_near_tray(&win);
+                                    position_at_notch(&win);
                                     let _ = win.show();
                                     crate::tray::apply_status_title(&app2, &st.view().await);
                                 }
@@ -111,6 +111,8 @@ pub fn run() {
 
             // Floating HUD: start hidden; remember drag position.
             hud::apply_clear(app.handle());
+            hud::apply_island_window(app.handle());
+            hud::spawn_click_through_guard(app.handle().clone());
             if let Some(panel) = app.get_webview_window("panel") {
                 let _ = panel.hide();
                 let st = state.clone();
@@ -159,7 +161,8 @@ pub fn run() {
             commands::show_panel,
             commands::hide_panel,
             commands::open_settings_window,
-            commands::set_hud_radius,
+            commands::get_notch_geometry,
+            commands::set_pill_rect,
         ])
         .run(tauri::generate_context!())
         .expect("error while running sub2viewer");
@@ -169,8 +172,9 @@ fn show_panel_window(app: &tauri::AppHandle) {
     hud::apply_clear(app);
     if let Some(win) = app.get_webview_window("panel") {
         restore_or_place(&win, app);
+        // No set_focus: the island must not pull focus from the
+        // frontmost app.
         let _ = win.show();
-        let _ = win.set_focus();
     }
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_title(None::<&str>);
@@ -207,21 +211,31 @@ fn restore_or_place(win: &tauri::WebviewWindow, app: &tauri::AppHandle) {
             (Some(x), Some(y)) => {
                 let _ = win.set_position(Position::Logical(tauri::LogicalPosition { x, y }));
             }
-            _ => position_near_tray(&win),
+            _ => position_at_notch(&win),
         }
     });
 }
 
-fn position_near_tray(win: &tauri::WebviewWindow) {
-    // Best-effort: place near top-right (menu bar / HUD zone).
-    if let Ok(Some(monitor)) = win.current_monitor() {
-        let screen = monitor.size();
+fn position_at_notch(win: &tauri::WebviewWindow) {
+    // Anchor the fixed-size island window at the top-center of the
+    // primary screen. The capsule inside hugs the top edge: it covers
+    // the hardware notch on notched displays and forms a virtual island
+    // on notch-less ones (e.g. a Mac mini with an external monitor).
+    let monitor = win
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| win.current_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
         let scale = monitor.scale_factor();
+        let mon_pos = monitor.position();
+        let mon_size = monitor.size();
         let win_size = win
             .outer_size()
-            .unwrap_or(tauri::PhysicalSize::new(480, 300));
-        let x = (screen.width as f64 / scale) - (win_size.width as f64 / scale) - 16.0;
-        let y = 36.0;
-        let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+            .unwrap_or(tauri::PhysicalSize::new(360, 580));
+        let x = mon_pos.x as f64 / scale
+            + (mon_size.width as f64 / scale - win_size.width as f64 / scale) / 2.0;
+        let y = mon_pos.y as f64 / scale;
+        let _ = win.set_position(Position::Logical(tauri::LogicalPosition { x, y }));
     }
 }

@@ -231,8 +231,9 @@ pub async fn admin_login_2fa(
 #[tauri::command]
 pub fn show_panel(app: AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("panel") {
+        // Island-style: show without activating, so the app the user is
+        // working in keeps focus.
         let _ = win.show();
-        let _ = win.set_focus();
     }
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_title(None::<&str>);
@@ -275,7 +276,12 @@ pub fn open_settings_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn set_hud_radius(app: AppHandle, radius: f64) -> Result<(), String> {
-    crate::hud::set_corner_radius(&app, radius);
+pub fn get_notch_geometry() -> crate::hud::NotchGeometry {
+    crate::hud::notch_geometry()
+}
+
+#[tauri::command]
+pub fn set_pill_rect(x: f64, y: f64, width: f64, height: f64) -> Result<(), String> {
+    crate::hud::set_pill_rect(x, y, width, height);
     Ok(())
 }
