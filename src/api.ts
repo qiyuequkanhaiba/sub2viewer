@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppStateView,
   LoginResult,
+  NotchGeometry,
   SitePublic,
   SiteUpsert,
 } from "./types";
@@ -54,4 +55,17 @@ export function adminLogin2fa(
 
 export function openSettingsWindow() {
   return invoke<void>("open_settings_window");
+}
+
+export function getNotchGeometry() {
+  return invoke<NotchGeometry>("get_notch_geometry");
+}
+
+export function setPillRect(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+) {
+  return invoke<void>("set_pill_rect", { x, y, width, height });
 }

@@ -328,6 +328,10 @@ impl AppState {
         let view = self.view().await;
         crate::tray::apply_tray_menu(app, &view);
         for body in notes {
+            // Island peek: expand the capsule briefly alongside the
+            // system notification. take_alert already dedupes, so this
+            // fires at most once per worsening per site.
+            let _ = app.emit("alert-peek", body.clone());
             notify(app, &body);
         }
     }
