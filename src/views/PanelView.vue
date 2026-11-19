@@ -257,6 +257,8 @@ watch(
   [
     () => m.value.rows.length,
     () => m.value.hero,
+    () => m.value.heroBalance,
+    () => m.value.heroAccounts,
     () => m.value.okAccounts,
     () => m.value.totalAccounts,
     () => keys.value.rows.length,
@@ -510,6 +512,11 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  /* Never shrink: collapsedSize() reads this element's scrollWidth as
+     the capsule's target width. If the lead (or its text spans) could
+     shrink and ellipsize, the measurement would return the clipped
+     width and the capsule would stay too narrow forever. */
+  flex-shrink: 0;
 }
 
 .dot {
@@ -560,6 +567,7 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .hero.accounts {
