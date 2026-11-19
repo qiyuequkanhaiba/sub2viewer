@@ -614,24 +614,19 @@ onUnmounted(() => {
 }
 
 .body {
-  animation: fadeInBody 0.25s cubic-bezier(0.16, 1, 0.3, 1) 0.12s both;
+  /* No entrance animation: the body used to fade in via a CSS
+     animation starting at opacity 0 (0.12s delay, fill both). In
+     this never-activated background panel, WebKit can leave CSS
+     animations paused at their first frame, which left the expanded
+     body permanently invisible even though it was laid out and the
+     capsule sized for it. The JS spring already provides the motion;
+     the body is simply visible. */
   margin-top: 7px;
   display: flex;
   flex-direction: column;
   gap: 7px;
   max-height: 520px;
   overflow-y: auto;
-}
-
-@keyframes fadeInBody {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 .detail,
