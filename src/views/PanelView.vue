@@ -28,6 +28,7 @@ const geometry = ref<NotchGeometry>({
 });
 let unlistenState: (() => void) | undefined;
 let unlistenPeek: (() => void) | undefined;
+let unlistenCursorOut: (() => void) | undefined;
 let unbindDrag: (() => void) | undefined;
 let hoverTimer: ReturnType<typeof setTimeout> | undefined;
 let leaveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -204,7 +205,12 @@ function handleMouseEnter() {
   }, 300);
 }
 
-function handleMouseLeave() {
+// Collapse intent, shared by the DOM mouseleave and the Rust
+// click-through guard's pill-cursor-out event: the DOM event alone
+// is not reliable here (see hud.rs — it can be swallowed when the
+// window flips to ignoring cursor events), so both paths schedule
+// the same 100ms-debounced collapse.
+function scheduleCollapse() {
   if (hoverTimer) {
     clearTimeout(hoverTimer);
     hoverTimer = undefined;
@@ -213,6 +219,10 @@ function handleMouseLeave() {
   leaveTimer = setTimeout(() => {
     hoverIntent.value = false;
   }, 100);
+}
+
+function handleMouseLeave() {
+  scheduleCollapse();
 }
 
 onMounted(async () => {
@@ -233,6 +243,9 @@ onMounted(async () => {
     peekTimer = setTimeout(() => {
       peeking.value = false;
     }, 4000);
+  });
+  unlistenCursorOut = await listen("pill-cursor-out", () => {
+    scheduleCollapse();
   });
   await nextTick();
   if (pillRef.value) {
@@ -281,6 +294,7 @@ onUnmounted(() => {
   document.body.classList.remove("panel-mode");
   unlistenState?.();
   unlistenPeek?.();
+  unlistenCursorOut?.();
   unbindDrag?.();
   if (hoverTimer) clearTimeout(hoverTimer);
   if (leaveTimer) clearTimeout(leaveTimer);
