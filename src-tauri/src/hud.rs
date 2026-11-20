@@ -8,7 +8,7 @@
 //! fullScreenAuxiliary | stationary | canJoinAllSpaces | ignoresCycle.
 
 use std::sync::Mutex;
-use tauri::{webview::Color, Manager};
+use tauri::{webview::Color, Emitter, Manager};
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -224,6 +224,21 @@ pub fn spawn_click_through_guard(app: tauri::AppHandle) {
             if let Some(ignore) = desired_ignore(&app) {
                 if applied != Some(ignore) {
                     applied = Some(ignore);
+                    if ignore {
+                        // The cursor just left the capsule. The DOM
+                        // mouseleave that normally collapses the island
+                        // can be lost at exactly this moment: once the
+                        // window starts ignoring cursor events, WebKit
+                        // receives no further mouseMoved and may never
+                        // synthesize the leave (a fast flick out is the
+                        // common case), leaving hoverIntent stuck on
+                        // and the island expanded forever. Notify the
+                        // frontend through this event instead — it is
+                        // driven by the same global cursor tracking
+                        // that gates event delivery. (ignore is only
+                        // ever true while the panel is visible.)
+                        let _ = app.emit("pill-cursor-out", ());
+                    }
                     let app2 = app.clone();
                     let _ = app.run_on_main_thread(move || {
                         if let Some(win) = app2.get_webview_window("panel") {
