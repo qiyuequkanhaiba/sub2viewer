@@ -627,6 +627,15 @@ onUnmounted(() => {
   gap: 7px;
   max-height: 520px;
   overflow-y: auto;
+  /* Never shrink: on newer WebKit (seen on macOS 27.2.1) a flex item
+     whose overflow is not visible gets an automatic minimum size of
+     0, so this body collapsed to height 0 inside the pill and
+     expandedSize() (pill.scrollHeight) under-measured the expanded
+     height (54px instead of head + full body). Keeping the body at
+     its content height makes the measurement truthful on every
+     WebKit version; max-height + overflow-y still cap and scroll
+     very long content. Same pattern as .lead/.hero above. */
+  flex-shrink: 0;
 }
 
 .detail,
